@@ -2,6 +2,7 @@
 import mimetypes
 import functools
 from pathlib import Path
+from typing import Optional
 
 from werkzeug.wrappers import Response
 from werkzeug.wsgi import wrap_file
@@ -116,15 +117,15 @@ class web(object):
         web.destinations = []
 
     def __init__(
-        self,
-        *args,
-        route=None,
-        template=None,
-        methods=None,
-        endpoint=None,
-        file=False,
-        cors=None,
-        mimetype=None
+            self,
+            *args,
+            route=None,
+            template=None,
+            methods=None,
+            endpoint=None,
+            file=False,
+            cors=None,
+            mimetype=None
     ):
 
         self.endpoint = endpoint
@@ -227,6 +228,7 @@ class web(object):
 
             # Create the rule and add it tot he map
             rule = Rule(item.route, endpoint=item.endpoint, methods=item.methods)
+            item.rule = rule
 
             map.add(rule)
 
@@ -241,11 +243,17 @@ class web(object):
         return match
 
     @staticmethod
-    def process(request, environ, cwd):
+    def process(request, environ, cwd, request_hooks: Optional[list]=None):
         # tid(f'web.process:(r, e cwd={cwd})')
 
         # Weg web() object that matches this request
         match = web.match(environ)
+        request.url_route = match
+        environ['simplerr.url_route'] = match
+
+        if request_hooks:
+            for hook in request_hooks:
+                hook(request)
 
         # Lets extract some key response information
         args = match.args
