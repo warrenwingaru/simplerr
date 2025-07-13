@@ -243,24 +243,23 @@ class web(object):
 
     @staticmethod
     def handle_peewee_model_data(data):
-        _data = None
+        _data = data
         try:
             # TODO: Get rid of this dependancy
             from peewee import ModelSelect, Model
             from playhouse.shortcuts import model_to_dict
-            if isinstance(data, Model):
+            if isinstance(_data, Model):
                 out = model_to_dict(data)
                 _data = out
 
-            if isinstance(data, ModelSelect):
+            if isinstance(_data, ModelSelect):
                 array_out = []
                 for item in data:
                     array_out.append(model_to_dict(item))
-                    out = {"results": array_out}
-                    _data = out
+                out = {"results": array_out}
+                _data = out
         except ImportError:
             logger.warning("peewee not installed, cannot serialise peewee models")
-            _data = data
         return _data
 
 
@@ -361,7 +360,7 @@ class web(object):
 
         # Check to see if this is a peewee model and convert to
         # dict,
-        data = web.handle_peewee_model_data(out)
+        data = web.handle_peewee_model_data(data)
 
         # Template expected, attempt render
         if template is not None:
