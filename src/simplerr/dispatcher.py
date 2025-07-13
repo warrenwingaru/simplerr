@@ -105,8 +105,15 @@ class dispatcher(object):
     def __call__(self, environ, start_response):
         """This methods provides the basic call signature required by WSGI"""
         request = WebRequest(environ)
-        response = self.dispatch_request(request, environ)
-        return response(environ, start_response)
+        response, exc = self.dispatch_request(request, environ)
+
+        try:
+            return response(environ, start_response)
+        finally:
+            # Fire post response events
+            request.view_events.fire_post_response(request, response, exc)
+            self.global_events.fire_post_response(request, response, exc)
+
 
     def dispatch_request(self, request, environ):
         response = None
@@ -135,21 +142,17 @@ class dispatcher(object):
             exc = e
             response = e
             logger.error(f"HTTPException: {e}")
-        except OSError as e:
-            exc = e
-            response = NotFound()
+        except FileNotFoundError as e:
+            exc = NotFound(str(e))
+            response = exc
             logger.error(f"OSError: {e}")
         except Exception as e:
-            exc = e
-            response = InternalServerError()
+            exc = InternalServerError(str(e))
+            response = exc
             logger.error(f"Exception: {e}")
-        finally:
-            # Fire post response events
-            request.view_events.fire_post_response(request, response, exc)
-            self.global_events.fire_post_response(request, response, exc)
 
         # There should be no more user code after this being run
-        return response  # return web.process(route).
+        return response, exc  # return web.process(route).
 
 
 # WSGI Server
