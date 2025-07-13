@@ -33,6 +33,7 @@ requires-python = ">=3.6"
 [project.optional-dependencies]
 dev = ["check-manifest", "peewee==3.13.3"]
 test = ["coverage", "colour_runner", "pytest"]
+authlib = ["authlib==1.2.1", "requests==2.22.0"]
 
 [project.urls]
 Homepage = "https://github.com/yevrah/simplerr"
