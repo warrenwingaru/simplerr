@@ -65,6 +65,20 @@ class SimplerrOAuthTest(TestCase):
         super().setUp()
         self.factory = RequestClient()
 
+    def test_register_factory(self):
+        oauth = OAuth(config=lambda : common_config)
+        oauth.register(
+            "dev",
+            client_id="dev",
+            client_secret="dev",
+            request_token_url="https://127.0.0.1:5000/request-token",
+            api_base_url="http://127.0.0.1:5000/api",
+            access_token_url="http://127.0.0.1:5000/oauth/token",
+            authorize_url="http://127.0.0.1:5000/oauth/authorize",
+        )
+        self.assertEqual(oauth.dev.name, "dev")
+        self.assertEqual(oauth.dev.client_id, "dev")
+
 
     def test_register_remote_app(self):
         oauth = OAuth(config=common_config)
