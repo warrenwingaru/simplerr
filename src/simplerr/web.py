@@ -3,13 +3,16 @@ import logging
 import mimetypes
 import functools
 from pathlib import Path
-from typing import Optional
+import typing as t
 
-from werkzeug.wrappers import Response
+from werkzeug.wrappers import BaseResponse
+
+from .wrappers import Response, Request
 from werkzeug.wsgi import wrap_file
 from werkzeug.exceptions import abort
 from werkzeug.routing import Map, Rule
 from werkzeug.utils import redirect as wz_redirect
+from collections import abc as cabc
 
 from .template import Template
 from .serialise import tojson
@@ -217,7 +220,7 @@ class web(object):
         return decorated
 
     @staticmethod
-    def match(environ):
+    def match(request: Request):
         map = Map()
         index = {}
 
@@ -227,17 +230,19 @@ class web(object):
 
             # Create the rule and add it tot he map
             rule = Rule(item.route, endpoint=item.endpoint, methods=item.methods)
-            item.rule = rule
 
             map.add(rule)
 
         # Check for match
-        urls = map.bind_to_environ(environ)
-        endpoint, args = urls.match()
+        urls = map.bind_to_environ(request.environ)
+        rule, args = urls.match(return_rule=True)
 
         # Get match and attach current args
-        match = index[endpoint]
-        match.args = args
+        match = index[rule.endpoint]
+
+        request.url_rule = rule
+        request.view_args = args
+        request.match = match
 
         return match
 
@@ -270,41 +275,34 @@ class web(object):
         return data
 
     @staticmethod
-    def handle_template_data(template, data, request, cwd, cors=None):
+    def handle_template_data(request, rv):
         # Add request to data
-        data = data or {}
-        data["request"] = request
-        out = web.template(cwd, template, data)
+        rv = rv or {}
+        rv["request"] = request
+        out = web.template(request.cwd, request.match.template, rv)
 
         response = Response(out)
         response.headers["Content-Type"] = "text/html;charset=utf-8"
 
-        # TODO: make reponse plugin based, so cors needs to be added - pre-respon
-        if cors:
-            cors.set(response)
-
         return response
 
     @staticmethod
-    def handle_file_data(cwd, out, environ, mimetype, cors=None):
-        file_path = Path(cwd) / Path(out)
+    def handle_file_data(request, rv):
+        file_path = Path(request.cwd) / Path(rv)
         file = open(file_path.absolute().__str__(), "rb")
-        data = wrap_file(environ, file)
+        data = wrap_file(request.environ, file)
 
-        mtype = mimetype or mimetypes.guess_type(file_path.__str__())[0]
+        mtype = request.match.mimetype or mimetypes.guess_type(file_path.__str__())[0]
 
         # Sometimes files are named without extensions in the local storage, so
         # instead try and infer from the route
         if mtype is None:
-            urifile = environ.get("PATH_INFO").split("/")[-1:][0]
+            urifile = request.environ.get("PATH_INFO").split("/")[-1:][0]
             mtype = mimetypes.guess_type(urifile)[0]
 
         response = Response(data, direct_passthrough=True)
         response.headers["Content-Type"] = "{};charset=utf-8".format(mtype)
         response.headers["Cache-Control"] = "public, max-age=10800"
-
-        if cors:
-            cors.set(response)
 
         return response
 
@@ -324,25 +322,83 @@ class web(object):
         return response
 
     @staticmethod
-    def process(request, environ, cwd, request_hooks: Optional[list] = None):
+    def make_response(request, rv) -> Response:
+        # TODO: Can we replace the Model, and ModelSelct with json.dumps(data,
+        # json_serial) which has been udpated to handle these types?
+
+        # TODO: All serialisable items need to have a obj.todict() method, otheriwse
+        # str(obj) will be used.
+
+        status: t.Optional[int] = None
+        headers: t.Optional[dict] = None
+        if rv is None:
+            raise TypeError(f"The view function for {request.endpoint!r} did not"
+                            f"return a valid response. The function either returned"
+                            f"None or ended without a return statement")
+        if not isinstance(rv, Response):
+
+            # preprocess peewee data
+            rv = web.handle_peewee_model_data(rv)
+
+            if isinstance(rv, (str, bytes, bytearray) or isinstance(rv, cabc.Iterable)):
+                rv = Response(
+                    rv,
+                    status=status,
+                    headers=headers,
+                )
+                status = headers = None
+            elif isinstance(rv, (dict, list)):
+                rv = web.handle_json_data(rv)
+            elif isinstance(rv, BaseResponse) or callable(rv):
+                try:
+                    rv = Response.force_type(rv, request.environ)
+                except TypeError as e:
+                    raise TypeError(
+                        f"The view function did not return a valid response. The"
+                        f"returned value was {rv!r} of type {type(rv).__name__}."
+                    ) from e
+            else:
+                raise TypeError(
+                    f"The view function did not return a valid response. The"
+                    f"returned value was {rv!r} of type {type(rv).__name__}."
+                )
+            if request.match.template:
+                rv = web.handle_template_data(
+                    request, rv
+                )
+            elif request.match.file:
+                rv = web.handle_file_data(
+                    request, rv
+                )
+        rv = t.cast(Response, rv)
+        if status is not None:
+            if isinstance(status, (str, bytes, bytearray)):
+                rv.status = status
+            else:
+                rv.status_code = status
+
+        if headers:
+            rv.headers.update(headers)
+
+        if request.cors:
+            request.cors.set(rv)
+
+        return rv
+
+    @staticmethod
+    def process(request: Request):
         # tid(f'web.process:(r, e cwd={cwd})')
 
         # Weg web() object that matches this request
-        try:
-            match = web.match(environ)
-            request.url_route = match
-            environ['simplerr.url_route'] = match
-        finally:
-            if request_hooks:
-                for hook in request_hooks:
-                    hook(request)
+        match = web.match(request)
+        request.environ['simplerr.url_rule'] = request.url_rule
 
         # Lets extract some key response information
-        args = match.args
-        out = match.fn(request, **args)
+        args = request.view_args
+        rv = match.fn(request, **args)
         # tid(f'web.process().out = {out}')
 
-        data = out
+        data = rv
         template = match.template
         file = match.file
         mimetype = match.mimetype
@@ -364,12 +420,12 @@ class web(object):
 
         # Template expected, attempt render
         if template is not None:
-            return web.handle_template_data(template, data, request, cwd, cors)
+            return web.handle_template_data(request, rv)
 
         # Reference example implementation here
         #   http://bit.ly/2ocHYNZ
         if file is True:
-            return web.handle_file_data(cwd, out, environ, mimetype, cors)
+            return web.handle_file_data(request, rv)
 
         # No template, just plain old string response
         if isinstance(data, str):
