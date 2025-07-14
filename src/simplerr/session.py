@@ -15,7 +15,7 @@ class SessionSignalMixin:
         else:
             request.session = self.get(sid)
 
-    def post_response(self, request, response, exc):
+    def post_response(self, request, response):
         if hasattr(request, "session"):
             if request.session.should_save:
                 self.save(request.session)

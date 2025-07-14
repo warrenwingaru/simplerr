@@ -1,5 +1,5 @@
 from unittest import TestCase
-from simplerr import web, GET, POST, DELETE, PUT, PATCH
+from simplerr import web, GET, POST, DELETE, PUT, PATCH, Request
 from werkzeug.test import EnvironBuilder
 import os
 from pprint import pprint
@@ -77,16 +77,19 @@ class BasicWebTests(TestCase):
         self.assertEqual(web.destinations[2].route, "/response/dict")
 
     def test_match_simple_route(self):
-        rv = web.match(create_env("/simple"))
-        self.assertEquals(rv.fn.__name__, "simple_fn")
+        env = create_env("/simple")
+        req = Request(env)
+        req.url_rule, req.view_args, req.match = web.match_request(req)
+        self.assertEquals(req.match.fn.__name__, "simple_fn")
 
     def test_process_request(self):
         from werkzeug.wrappers import Request, Response
 
         env = create_env("/simple")
         req = Request(env)
+        req.cwd = self.cwd
 
-        resp = web.process(req, env, self.cwd)
+        resp = web.process(req)
         self.assertIsInstance(resp, Response)
         self.assertEquals(resp.status_code, 200)
         self.assertEquals(resp.data, b"null")
@@ -117,12 +120,14 @@ class BasicWebTests(TestCase):
         self.assertRaises(Unauthorized, web.abort, code=401)
 
     def test_send_files(self):
-        from werkzeug.wrappers import Request, Response
+        from simplerr.wrappers import Request, Response
 
         env = create_env("/response/file")
         req = Request(env)
 
-        resp = web.process(req, env, self.cwd)
+        req.cwd = self.cwd
+
+        resp = web.process(req)
 
         self.assertIsInstance(resp, Response)
         self.assertEquals(resp.status_code, 200)
