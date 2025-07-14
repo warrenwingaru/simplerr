@@ -79,8 +79,8 @@ class BasicWebTests(TestCase):
     def test_match_simple_route(self):
         env = create_env("/simple")
         req = Request(env)
-        rv = web.match(req)
-        self.assertEquals(rv.fn.__name__, "simple_fn")
+        req.url_rule, req.view_args, req.match = web.match_request(req)
+        self.assertEquals(req.match.fn.__name__, "simple_fn")
 
     def test_process_request(self):
         from werkzeug.wrappers import Request, Response
