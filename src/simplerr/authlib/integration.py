@@ -8,18 +8,20 @@ class SimplerrIntegration(FrameworkIntegration):
             return {}
 
         if isinstance(oauth.config, Callable):
-            result = oauth.config()
+            result = oauth.config(oauth, name, params)
             if result is None:
                 raise RuntimeError('config factory must return a value')
             if not isinstance(result, dict):
                 raise ValueError('config factory must return a dictionary value')
-            oauth.config = result
+            return result
+        else:
+            config_dict = oauth.config
 
 
         rv = {}
         for k in params:
             conf_key = '{}_{}'.format(name, k).upper()
-            v = oauth.config.get(conf_key, None)
+            v = config_dict.get(conf_key, None)
             if v is not None:
                 rv[k] = v
         return rv
