@@ -34,6 +34,7 @@ class Request(BaseRequest):
 
     routing_exception: t.Optional[HTTPException] = None
     cors: t.Optional[CORS] = None
+    cwd: t.Optional[str] = None
 
     def __init__(self, *args, auth_class=None, **kwargs):
         super(Request, self).__init__(*args, **kwargs)

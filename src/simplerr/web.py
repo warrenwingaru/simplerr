@@ -264,13 +264,13 @@ class web(object):
         return data
 
     @staticmethod
-    def handle_template_data(request, rv):
+    def handle_template_data(request: Request, rv):
         # Add request to data
         rv = rv or {}
         rv['result'] = request
 
         # add data to response
-        out = web.template(request.cwd, request.match_request.template, rv)
+        out = web.template(request.cwd, request.match.template, rv)
 
         response = Response(out)
         response.headers["Content-Type"] = "text/html;charset=utf-8"
@@ -313,10 +313,10 @@ class web(object):
         return response
 
     @staticmethod
-    def make_response(request, rv) -> Response:
+    def make_response(request: Request, rv) -> Response:
         status: t.Optional[int] = None
         headers: t.Optional[dict] = None
-        if rv is None and (request.match_request.template is None and request.match_request.file is False):
+        if rv is None and (request.match.template is None and request.match.file is False):
             raise TypeError(f"The view function for {request.endpoint!r} did not"
                             f" return a valid response. The function either returned"
                             f" None or ended without a return statement")
