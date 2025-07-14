@@ -1,23 +1,19 @@
 import logging
-
+import sys
 import typing as t
-
-from werkzeug.routing import RoutingException, RequestRedirect
-from werkzeug.serving import run_simple
-from werkzeug.exceptions import NotFound, HTTPException, InternalServerError, BadRequestKeyError
-from werkzeug.debug import DebuggedApplication
 from pathlib import Path
-from inspect import iscoroutinefunction
+
+from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError
+from werkzeug.routing import RoutingException, RequestRedirect
 
 from .events import WebEvents
-from .web import web
-import sys
-
 from .script import script
 from .session import FileSystemSessionStore
+from .web import web
 from .wrappers import Request, Response
 
 logger = logging.getLogger(__name__)
+
 
 class SiteError(Exception):
     """Base class for exceptions in this module."""
@@ -40,19 +36,20 @@ class SiteNoteFoundError(SiteError):
 
 
 class dispatcher(object):
-    def __init__(self, cwd, global_events: WebEvents, extension=".py"):
+    def __init__(self, cwd, global_events: WebEvents, extension=".py", debug: bool = False):
         self.cwd = cwd
         self.global_events = global_events
         self.extension = extension
-
+        self.debug = debug
 
     def __call__(self, environ, start_response):
         """This methods provides the basic call signature required by WSGI"""
         error: t.Optional[BaseException] = None
+        request = Request(environ)
+        self.match(request)
         try:
-            request = Request(environ)
             try:
-                response = self.full_dispatch_request(environ)
+                response = self.full_dispatch_request(request)
             except Exception as e:
                 error = e
                 response = self.handle_exception(request, e)
@@ -61,28 +58,30 @@ class dispatcher(object):
                 raise
             return response(environ, start_response)
         finally:
-            if error is not None and  self.should_ignore_error(error):
+            if error is not None and self.should_ignore_error(error):
                 error = None
-            self.do_teardown_request(error)
+            self.do_teardown_request(request, error)
 
-
-    def do_teardown_request(self, error: t.Optional[BaseException] = None):
+    def do_teardown_request(self, request: Request, error: t.Optional[BaseException] = None):
         for fn in reversed(self.global_events.teardown_request):
-            rv = fn(error)
+            rv = fn(request, error)
             if rv is not None:
                 error = rv
 
+    def match(self, request: Request):
+        try:
+            web.restore_presets()
+            # Get view script and view module
+            sc = script(self.cwd, request.path, extension=self.extension)
+            sc.get_module()
+
+            request.url_rule, request.view_args, request.match = web.match_request(request)
+            request.environ['simplerr.url_rule'] = request.url_rule
+        except HTTPException as e:
+            request.routing_exception = e
+
     def should_ignore_error(self, error: t.Optional[BaseException] = None) -> bool:
         return False
-
-        # response, exc = self.dispatch_request(request, environ)
-        #
-        # try:
-        #     return response(environ, start_response)
-        # finally:
-        #     # Fire post response events
-        #     request.view_events.fire_post_response(request, response, exc)
-        #     self.global_events.fire_post_response(request, response, exc)
 
     def full_dispatch_request(self, request) -> Response:
         self._got_first_request = True
@@ -114,32 +113,44 @@ class dispatcher(object):
         return e
 
     def handle_exception(self, request, e) -> Response:
+        exc_info = sys.exc_info()
+        propogate = None
+        if propogate is None:
+            propogate = self.debug
+        if propogate:
+            if exc_info[1] is e:
+                raise
+            raise e
+
         server_error = InternalServerError(str(e))
+
         return self.finalize_request(request, server_error, from_error_handler=True)
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
+            print('is debug {}'.format(self.debug))
             e.show_exception = True
         if isinstance(e, HTTPException):
             return self.handle_http_exeption(e)
 
         return e
 
-    def finalize_request(self, request: Request, rv: Response, from_error_handler: bool =False) -> Response:
+    def finalize_request(self, request: Request, rv: Response, from_error_handler: bool = False) -> Response:
         response = web.make_response(request=request, rv=rv)
         try:
-            response = self.process_response(request,response)
+            response = self.process_response(request, response)
         except Exception as e:
+            print('e {}'.format(e))
             if not from_error_handler:
                 raise
             logger.error(f"Request finalizing failed with an error while handling an error")
 
         return response
 
-    def process_response(self, request: Request,response: Response) -> Response:
+    def process_response(self, request: Request, response: Response) -> Response:
 
         for fn in reversed(self.global_events.post_request):
-            rv = fn(request,response)
+            rv = fn(request, response)
             if rv is not None:
                 response = rv
 
@@ -157,21 +168,12 @@ class dispatcher(object):
         return None
 
     def dispatch_request(self, request: Request):
-
-        web.restore_presets()
-
-        # Get view script and view module
-        sc = script(self.cwd, request.path, extension=self.extension)
-        sc.get_module()
-
-        match = web.match(request)
-        request.cwd = self.cwd
-
         if request.routing_exception is not None:
+            print('routing exception {}'.format(request.routing_exception))
             self.raise_routing_exception(request)
 
         view_args: dict[str, t.Any] = request.view_args
-        return match.fn(request, **view_args)
+        return request.match.fn(request, **view_args)
 
 
 # WSGI Server
@@ -182,6 +184,7 @@ class wsgi(object):
             extension=".py"
     ):
 
+        self.debug = False
         self.site = site
         self.extension = extension
 
@@ -222,13 +225,8 @@ class wsgi(object):
     def _setup_path(self):
         sys.path.append(self.cwd.absolute().__str__())
 
-
-    def make_app(self):
-        self.wsgi_app = dispatcher(self.cwd, self.global_events, self.extension)
-        return self.wsgi_app
-
     def wsgi_app(self, environ, start_response):
-        return dispatcher(self.cwd, self.global_events, self.extension)(environ, start_response)
+        return dispatcher(self.cwd, self.global_events, self.extension, self.debug)(environ, start_response)
 
     def __call__(self, environ, start_response):
         return self.wsgi_app(environ, start_response)

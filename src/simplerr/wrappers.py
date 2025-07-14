@@ -1,4 +1,5 @@
 import json
+import logging
 from functools import lru_cache
 import typing as t
 
@@ -11,8 +12,6 @@ from werkzeug.routing import Rule
 
 from .cors import CORS
 from .events import WebEvents
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,9 @@ class Request(BaseRequest):
 
     #: A dict of view arguments that matched the request. If an exception
     #: happened when matching, this will be ``None``.
-    view_args: t.Optional[dict[str, t.Any]] = None
+    view_args: t.Optional[t.Any] = None
+
+    match: t.Optional[t.Any] = None
 
     routing_exception: t.Optional[HTTPException] = None
     cors: t.Optional[CORS] = None

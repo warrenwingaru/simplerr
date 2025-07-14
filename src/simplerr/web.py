@@ -1,23 +1,22 @@
 #!/usr/bin/env python
+import functools
 import logging
 import mimetypes
-import functools
-from pathlib import Path
 import typing as t
+from collections import abc as cabc
+from pathlib import Path
 
-from werkzeug.wrappers import BaseResponse
-
-from .wrappers import Response, Request
-from werkzeug.wsgi import wrap_file
 from werkzeug.exceptions import abort
 from werkzeug.routing import Map, Rule
 from werkzeug.utils import redirect as wz_redirect
-from collections import abc as cabc
+from werkzeug.wrappers import BaseResponse
+from werkzeug.wsgi import wrap_file
 
-from .template import Template
-from .serialise import tojson
 from .errors import ToManyArgumentsError
 from .methods import BaseMethod
+from .serialise import tojson
+from .template import Template
+from .wrappers import Response, Request
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +219,7 @@ class web(object):
         return decorated
 
     @staticmethod
-    def match(request: Request):
+    def match_request(request: Request) -> t.Tuple[Rule, t.Dict[str, t.Any], t.Any]:
         map = Map()
         index = {}
 
@@ -237,14 +236,7 @@ class web(object):
         urls = map.bind_to_environ(request.environ)
         rule, args = urls.match(return_rule=True)
 
-        # Get match and attach current args
-        match = index[rule.endpoint]
-
-        request.url_rule = rule
-        request.view_args = args
-        request.match = match
-
-        return match
+        return rule, args, index[rule.endpoint]
 
     @staticmethod
     def handle_peewee_model_data(data):
@@ -267,9 +259,6 @@ class web(object):
             logger.warning("peewee not installed, cannot serialise peewee models")
         return _data
 
-
-
-
     @staticmethod
     def handle_response_data(data):
         return data
@@ -278,8 +267,10 @@ class web(object):
     def handle_template_data(request, rv):
         # Add request to data
         rv = rv or {}
-        rv["request"] = request
-        out = web.template(request.cwd, request.match.template, rv)
+        rv['result'] = request
+
+        # add data to response
+        out = web.template(request.cwd, request.match_request.template, rv)
 
         response = Response(out)
         response.headers["Content-Type"] = "text/html;charset=utf-8"
@@ -287,7 +278,7 @@ class web(object):
         return response
 
     @staticmethod
-    def handle_file_data(request, rv):
+    def handle_file_data(request: Request, rv):
         file_path = Path(request.cwd) / Path(rv)
         file = open(file_path.absolute().__str__(), "rb")
         data = wrap_file(request.environ, file)
@@ -323,52 +314,49 @@ class web(object):
 
     @staticmethod
     def make_response(request, rv) -> Response:
-        # TODO: Can we replace the Model, and ModelSelct with json.dumps(data,
-        # json_serial) which has been udpated to handle these types?
-
-        # TODO: All serialisable items need to have a obj.todict() method, otheriwse
-        # str(obj) will be used.
-
         status: t.Optional[int] = None
         headers: t.Optional[dict] = None
-        if rv is None:
+        if rv is None and (request.match_request.template is None and request.match_request.file is False):
             raise TypeError(f"The view function for {request.endpoint!r} did not"
-                            f"return a valid response. The function either returned"
-                            f"None or ended without a return statement")
+                            f" return a valid response. The function either returned"
+                            f" None or ended without a return statement")
         if not isinstance(rv, Response):
 
             # preprocess peewee data
             rv = web.handle_peewee_model_data(rv)
 
+            has_request = request is not None and request.match
+
             if isinstance(rv, (str, bytes, bytearray) or isinstance(rv, cabc.Iterable)):
-                rv = Response(
-                    rv,
-                    status=status,
-                    headers=headers,
-                )
+                if has_request and request.match.file is True:
+                    rv = web.handle_file_data(request, rv)
+                else:
+                    rv = Response(
+                        rv,
+                        status=status,
+                        headers=headers,
+                    )
                 status = headers = None
-            elif isinstance(rv, (dict, list)):
-                rv = web.handle_json_data(rv)
+            elif has_request and request.match.template is not None:
+                if isinstance(request.match.template, str) and request.match.template:
+                    rv = web.handle_template_data(request, rv)
+            elif isinstance(rv, (dict, list,)):
+                if has_request and request.match.template is not None:
+                    rv = web.handle_template_data(request, rv)
+                else:
+                    rv = web.handle_json_data(rv)
             elif isinstance(rv, BaseResponse) or callable(rv):
                 try:
                     rv = Response.force_type(rv, request.environ)
                 except TypeError as e:
                     raise TypeError(
                         f"The view function did not return a valid response. The"
-                        f"returned value was {rv!r} of type {type(rv).__name__}."
+                        f" returned value was {rv!r} of type {type(rv).__name__}."
                     ) from e
             else:
                 raise TypeError(
                     f"The view function did not return a valid response. The"
-                    f"returned value was {rv!r} of type {type(rv).__name__}."
-                )
-            if request.match.template:
-                rv = web.handle_template_data(
-                    request, rv
-                )
-            elif request.match.file:
-                rv = web.handle_file_data(
-                    request, rv
+                    f" returned value was {rv!r} of type {type(rv).__name__}."
                 )
         rv = t.cast(Response, rv)
         if status is not None:
@@ -390,7 +378,7 @@ class web(object):
         # tid(f'web.process:(r, e cwd={cwd})')
 
         # Weg web() object that matches this request
-        match = web.match(request)
+        match = web.match_request(request)
         request.environ['simplerr.url_rule'] = request.url_rule
 
         # Lets extract some key response information
@@ -430,7 +418,6 @@ class web(object):
         # No template, just plain old string response
         if isinstance(data, str):
             return web.handle_str_data(data, cors)
-
 
         # Just raw data, send as is
         # TODO: Must be flagged as json explicity
