@@ -378,10 +378,11 @@ class web(object):
         # tid(f'web.process:(r, e cwd={cwd})')
 
         # Weg web() object that matches this request
-        match = web.match_request(request)
+        request.url_rule, request.view_args, request.match = web.match_request(request)
         request.environ['simplerr.url_rule'] = request.url_rule
 
         # Lets extract some key response information
+        match = request.match
         args = request.view_args
         rv = match.fn(request, **args)
         # tid(f'web.process().out = {out}')
