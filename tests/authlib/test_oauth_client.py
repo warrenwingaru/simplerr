@@ -66,7 +66,7 @@ class SimplerrOAuthTest(TestCase):
         self.factory = RequestClient()
 
     def test_register_factory(self):
-        oauth = OAuth(config=lambda : common_config)
+        oauth = OAuth(config=lambda oauth, name, params: common_config)
         oauth.register(
             "dev",
             client_id="dev",
