@@ -40,7 +40,7 @@ class SiteNoteFoundError(SiteError):
 
 
 class dispatcher(object):
-    def __init__(self, cwd, global_events, extension=".py"):
+    def __init__(self, cwd, global_events: WebEvents, extension=".py"):
         self.cwd = cwd
         self.global_events = global_events
         self.extension = extension
@@ -48,14 +48,32 @@ class dispatcher(object):
 
     def __call__(self, environ, start_response):
         """This methods provides the basic call signature required by WSGI"""
+        error: t.Optional[BaseException] = None
         try:
+            request = Request(environ)
             try:
                 response = self.full_dispatch_request(environ)
             except Exception as e:
                 error = e
-                response = self.handle_exception(e)
+                response = self.handle_exception(request, e)
+            except:
+                error = sys.exc_info()[1]
+                raise
+            return response(environ, start_response)
         finally:
-            pass
+            if error is not None and  self.should_ignore_error(error):
+                error = None
+            self.do_teardown_request(error)
+
+
+    def do_teardown_request(self, error: t.Optional[BaseException] = None):
+        for fn in reversed(self.global_events.teardown_request):
+            rv = fn(error)
+            if rv is not None:
+                error = rv
+
+    def should_ignore_error(self, error: t.Optional[BaseException] = None) -> bool:
+        return False
 
         # response, exc = self.dispatch_request(request, environ)
         #
@@ -66,10 +84,9 @@ class dispatcher(object):
         #     request.view_events.fire_post_response(request, response, exc)
         #     self.global_events.fire_post_response(request, response, exc)
 
-    def full_dispatch_request(self, environ) -> Response:
+    def full_dispatch_request(self, request) -> Response:
         self._got_first_request = True
 
-        request = Request(environ)
         try:
             rv = self.preprocess_request(request)
             if rv is None:
@@ -80,8 +97,10 @@ class dispatcher(object):
 
     def preprocess_request(self, request: Request) -> t.Optional[Response]:
 
-        self.global_events.fire_pre_request(request)
-        request.view_events.fire_pre_request(request)
+        for fn in self.global_events.pre_request:
+            rv = fn(request)
+            if rv is not None:
+                return rv
 
         return None
 
@@ -94,9 +113,9 @@ class dispatcher(object):
 
         return e
 
-    def handle_exception(self, e) -> Response:
+    def handle_exception(self, request, e) -> Response:
         server_error = InternalServerError(str(e))
-        return self.finalize_request(server_error, from_error_handler=True)
+        return self.finalize_request(request, server_error, from_error_handler=True)
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
@@ -110,7 +129,7 @@ class dispatcher(object):
         response = web.make_response(request=request, rv=rv)
         try:
             response = self.process_response(request,response)
-        except Exception:
+        except Exception as e:
             if not from_error_handler:
                 raise
             logger.error(f"Request finalizing failed with an error while handling an error")
@@ -118,16 +137,20 @@ class dispatcher(object):
         return response
 
     def process_response(self, request: Request,response: Response) -> Response:
-        request.view_events.fire_post_request(request, response)
-        self.global_events.fire_post_request(request, response)
+
+        for fn in reversed(self.global_events.post_request):
+            rv = fn(request,response)
+            if rv is not None:
+                response = rv
+
         return response
 
     def raise_routing_exception(self, request: Request):
         if (
-            not self.debug
-            or not isinstance(request.routing_exception, RequestRedirect)
-            or request.routing_exception.code in {307, 308}
-            or request.method in {"GET", "HEAD", "OPTIONS"}
+                not self.debug
+                or not isinstance(request.routing_exception, RequestRedirect)
+                or request.routing_exception.code in {307, 308}
+                or request.method in {"GET", "HEAD", "OPTIONS"}
         ):
             raise request.routing_exception
 
@@ -141,11 +164,12 @@ class dispatcher(object):
         sc = script(self.cwd, request.path, extension=self.extension)
         sc.get_module()
 
+        match = web.match(request)
+        request.cwd = self.cwd
+
         if request.routing_exception is not None:
             self.raise_routing_exception(request)
 
-        match = web.match(request)
-        request.cwd = self.cwd
         view_args: dict[str, t.Any] = request.view_args
         return match.fn(request, **view_args)
 
@@ -153,15 +177,13 @@ class dispatcher(object):
 # WSGI Server
 class wsgi(object):
     def __init__(
-        self,
-        site,
-        extension=".py"
+            self,
+            site,
+            extension=".py"
     ):
 
         self.site = site
         self.extension = extension
-
-        self.wsgi_app = None
 
         # TODO: Need to update interface to handle these
         self.session_store = FileSystemSessionStore()
@@ -205,6 +227,9 @@ class wsgi(object):
         self.wsgi_app = dispatcher(self.cwd, self.global_events, self.extension)
         return self.wsgi_app
 
+    def wsgi_app(self, environ, start_response):
+        return dispatcher(self.cwd, self.global_events, self.extension)(environ, start_response)
+
     def __call__(self, environ, start_response):
         return self.wsgi_app(environ, start_response)
 
@@ -213,7 +238,7 @@ class wsgi(object):
               port: t.Optional[int] = None,
               debug: t.Optional[bool] = None,
               **options: t.Any
-          ):
+              ):
         """Start a new development server."""
         if debug is not None:
             self.debug = bool(debug)
