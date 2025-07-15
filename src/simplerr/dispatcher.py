@@ -3,7 +3,7 @@ import sys
 import typing as t
 from pathlib import Path
 
-from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError
+from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
 from werkzeug.routing import RoutingException, RequestRedirect
 
 from .events import WebEvents
@@ -124,9 +124,10 @@ class dispatcher(object):
 
         return e
 
-    def handle_exception(self, request, e) -> Response:
+    def handle_exception(self, request, e: BaseException) -> Response:
         exc_info = sys.exc_info()
         propogate = None
+
         if propogate is None:
             propogate = self.debug
         if propogate:
@@ -135,6 +136,9 @@ class dispatcher(object):
             raise e
 
         server_error = InternalServerError(str(e))
+
+        if isinstance(e, FileNotFoundError):
+            server_error = NotFound()
 
         return self.finalize_request(request, server_error, from_error_handler=True)
 
@@ -152,7 +156,6 @@ class dispatcher(object):
         try:
             response = self.process_response(request, response)
         except Exception as e:
-            print('e {}'.format(e))
             if not from_error_handler:
                 raise
             logger.error(f"Request finalizing failed with an error while handling an error")
