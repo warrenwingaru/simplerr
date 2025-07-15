@@ -83,13 +83,13 @@ class BasicWebTests(TestCase):
         self.assertEquals(req.match.fn.__name__, "simple_fn")
 
     def test_process_request(self):
-        from werkzeug.wrappers import Request, Response
+        from simplerr.wrappers import Request, Response
 
         env = create_env("/simple")
         req = Request(env)
         req.cwd = self.cwd
 
-        resp = web.process(req)
+        resp = web.make_response(req, 'null')
         self.assertIsInstance(resp, Response)
         self.assertEquals(resp.status_code, 200)
         self.assertEquals(resp.data, b"null")
@@ -126,9 +126,9 @@ class BasicWebTests(TestCase):
         req = Request(env)
 
         req.cwd = self.cwd
+        req.url_rule, req.view_args, req.match = web.match_request(req)
 
-        resp = web.process(req)
-
+        resp = web.make_response(req, req.match.fn(req, **req.view_args))
         self.assertIsInstance(resp, Response)
         self.assertEquals(resp.status_code, 200)
 

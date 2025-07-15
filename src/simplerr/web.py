@@ -12,6 +12,7 @@ from werkzeug.utils import redirect as wz_redirect
 from werkzeug.wrappers import BaseResponse
 from werkzeug.wsgi import wrap_file
 
+from . import typing as ft
 from .errors import ToManyArgumentsError
 from .methods import BaseMethod
 from .serialise import tojson
@@ -112,6 +113,10 @@ class web(object):
 
     filters = {}
     template_engine = None
+
+    rule_class = Rule
+
+    url_map_class = Map
 
     @staticmethod
     def restore_presets():
@@ -220,26 +225,26 @@ class web(object):
 
     @staticmethod
     def match_request(request: Request) -> t.Tuple[Rule, t.Dict[str, t.Any], t.Any]:
-        map = Map()
+        url_map = web.url_map_class()
         index = {}
 
         for item in web.destinations:
             # Lets create an index on routes, as urls.match returns a route
             index[item.endpoint] = item
 
-            # Create the rule and add it tot he map
-            rule = Rule(item.route, endpoint=item.endpoint, methods=item.methods)
+            # Create the rule and add it tot he url_map
+            rule = web.rule_class(item.route, endpoint=item.endpoint, methods=item.methods)
 
-            map.add(rule)
+            url_map.add(rule)
 
         # Check for match
-        urls = map.bind_to_environ(request.environ)
+        urls = url_map.bind_to_environ(request.environ)
         rule, args = urls.match(return_rule=True)
 
         return rule, args, index[rule.endpoint]
 
     @staticmethod
-    def handle_peewee_model_data(data):
+    def handle_peewee_model_data(data: ft.ResponseReturnValue):
         _data = data
         try:
             # TODO: Get rid of this dependancy
@@ -264,13 +269,13 @@ class web(object):
         return data
 
     @staticmethod
-    def handle_template_data(request, rv):
+    def handle_template_data(request: Request, rv: ft.ResponseReturnValue):
         # Add request to data
         rv = rv or {}
         rv['result'] = request
 
         # add data to response
-        out = web.template(request.cwd, request.match_request.template, rv)
+        out = web.template(request.cwd, request.match.template, rv)
 
         response = Response(out)
         response.headers["Content-Type"] = "text/html;charset=utf-8"
@@ -278,7 +283,7 @@ class web(object):
         return response
 
     @staticmethod
-    def handle_file_data(request: Request, rv):
+    def handle_file_data(request: Request, rv: str):
         file_path = Path(request.cwd) / Path(rv)
         file = open(file_path.absolute().__str__(), "rb")
         data = wrap_file(request.environ, file)
@@ -298,54 +303,39 @@ class web(object):
         return response
 
     @staticmethod
-    def handle_str_data(data, cors=None):
+    def handle_str_data(data: str):
         response = Response(data)
         response.headers["Content-Type"] = "text/html;charset=utf-8"
-        if cors:
-            cors.set(response)
         return response
 
     @staticmethod
-    def handle_json_data(data):
+    def handle_json_data(data: dict):
         out = tojson(data)
         response = Response(out)
         response.headers["Content-Type"] = "application/json"
         return response
 
     @staticmethod
-    def make_response(request, rv) -> Response:
+    def make_response(request: Request, rv: ft.ResponseReturnValue) -> Response:
         status: t.Optional[int] = None
         headers: t.Optional[dict] = None
-        if rv is None and (request.match_request.template is None and request.match_request.file is False):
-            raise TypeError(f"The view function for {request.endpoint!r} did not"
-                            f" return a valid response. The function either returned"
-                            f" None or ended without a return statement")
+
+        template = None
+        file = False
+        if request is not None and request.match:
+            template = request.match.template
+            file = request.match.file
+        if rv is None:
+            if template is None and not file:
+                raise TypeError(f"The view function for {request.endpoint!r} did not"
+                                f" return a valid response. The function either returned"
+                                f" None or ended without a return statement")
         if not isinstance(rv, Response):
 
             # preprocess peewee data
             rv = web.handle_peewee_model_data(rv)
 
-            has_request = request is not None and request.match
-
-            if isinstance(rv, (str, bytes, bytearray) or isinstance(rv, cabc.Iterable)):
-                if has_request and request.match.file is True:
-                    rv = web.handle_file_data(request, rv)
-                else:
-                    rv = Response(
-                        rv,
-                        status=status,
-                        headers=headers,
-                    )
-                status = headers = None
-            elif has_request and request.match.template is not None:
-                if isinstance(request.match.template, str) and request.match.template:
-                    rv = web.handle_template_data(request, rv)
-            elif isinstance(rv, (dict, list,)):
-                if has_request and request.match.template is not None:
-                    rv = web.handle_template_data(request, rv)
-                else:
-                    rv = web.handle_json_data(rv)
-            elif isinstance(rv, BaseResponse) or callable(rv):
+            if isinstance(rv, BaseResponse) or callable(rv):
                 try:
                     rv = Response.force_type(rv, request.environ)
                 except TypeError as e:
@@ -353,6 +343,19 @@ class web(object):
                         f"The view function did not return a valid response. The"
                         f" returned value was {rv!r} of type {type(rv).__name__}."
                     ) from e
+            elif template is not None:
+                rv = web.handle_template_data(request, rv)
+            elif file:
+                rv = web.handle_file_data(request, rv)
+            elif isinstance(rv, (dict, list)):
+                rv = web.handle_json_data(rv)
+            elif isinstance(rv, (str, bytes, bytearray)) or isinstance(rv, cabc.Iterable):
+                rv = Response(
+                    rv,
+                    status=status,
+                    headers=headers,
+                )
+                status = headers = None
             else:
                 raise TypeError(
                     f"The view function did not return a valid response. The"
