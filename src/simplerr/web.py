@@ -371,8 +371,8 @@ class web(object):
         if headers:
             rv.headers.update(headers)
 
-        if request.cors:
-            request.cors.set(rv)
+        if request.match.cors:
+            request.match.cors.set(rv)
 
         return rv
 
