@@ -114,6 +114,10 @@ class web(object):
     filters = {}
     template_engine = None
 
+    rule_class = Rule
+
+    url_map_class = Map
+
     @staticmethod
     def restore_presets():
         web.destinations = []
@@ -221,20 +225,20 @@ class web(object):
 
     @staticmethod
     def match_request(request: Request) -> t.Tuple[Rule, t.Dict[str, t.Any], t.Any]:
-        map = Map()
+        url_map = web.url_map_class()
         index = {}
 
         for item in web.destinations:
             # Lets create an index on routes, as urls.match returns a route
             index[item.endpoint] = item
 
-            # Create the rule and add it tot he map
-            rule = Rule(item.route, endpoint=item.endpoint, methods=item.methods)
+            # Create the rule and add it tot he url_map
+            rule = web.rule_class(item.route, endpoint=item.endpoint, methods=item.methods)
 
-            map.add(rule)
+            url_map.add(rule)
 
         # Check for match
-        urls = map.bind_to_environ(request.environ)
+        urls = url_map.bind_to_environ(request.environ)
         rule, args = urls.match(return_rule=True)
 
         return rule, args, index[rule.endpoint]
@@ -316,9 +320,13 @@ class web(object):
         status: t.Optional[int] = None
         headers: t.Optional[dict] = None
 
-        has_match = hasattr(request,'match')
+        template = None
+        file = False
+        if request is not None and request.match:
+            template = request.match.template
+            file = request.match.file
         if rv is None:
-            if has_match and (request.match.template is None and request.match.file is not True):
+            if template is None and not file:
                 raise TypeError(f"The view function for {request.endpoint!r} did not"
                                 f" return a valid response. The function either returned"
                                 f" None or ended without a return statement")
@@ -327,9 +335,17 @@ class web(object):
             # preprocess peewee data
             rv = web.handle_peewee_model_data(rv)
 
-            if request.match.template is not None:
+            if isinstance(rv, BaseResponse) or callable(rv):
+                try:
+                    rv = Response.force_type(rv, request.environ)
+                except TypeError as e:
+                    raise TypeError(
+                        f"The view function did not return a valid response. The"
+                        f" returned value was {rv!r} of type {type(rv).__name__}."
+                    ) from e
+            elif template is not None:
                 rv = web.handle_template_data(request, rv)
-            elif request.match.file is True:
+            elif file:
                 rv = web.handle_file_data(request, rv)
             elif isinstance(rv, (dict, list)):
                 rv = web.handle_json_data(rv)
@@ -340,14 +356,6 @@ class web(object):
                     headers=headers,
                 )
                 status = headers = None
-            elif isinstance(rv, BaseResponse) or callable(rv):
-                try:
-                    rv = Response.force_type(rv, request.environ)
-                except TypeError as e:
-                    raise TypeError(
-                        f"The view function did not return a valid response. The"
-                        f" returned value was {rv!r} of type {type(rv).__name__}."
-                    ) from e
             else:
                 raise TypeError(
                     f"The view function did not return a valid response. The"

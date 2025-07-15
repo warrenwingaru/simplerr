@@ -37,6 +37,10 @@ class SiteNoteFoundError(SiteError):
 
 
 class dispatcher(object):
+
+    request_class = Request
+    response_class = Response
+
     def __init__(self, cwd, global_events: WebEvents, extension=".py", debug: bool = False):
         self.cwd = cwd
         self.global_events = global_events
@@ -46,7 +50,7 @@ class dispatcher(object):
     def __call__(self, environ, start_response):
         """This methods provides the basic call signature required by WSGI"""
         error: t.Optional[BaseException] = None
-        request = Request(environ)
+        request = self.request_class(environ)
         self.match(request)
         try:
             try:
@@ -62,6 +66,11 @@ class dispatcher(object):
             if error is not None and self.should_ignore_error(error):
                 error = None
             self.do_teardown_request(request, error)
+
+    def make_default_options_response(self) -> Response:
+        """Creates a default response for OPTIONS requests."""
+        rv = self.response_class()
+        return rv
 
     def do_teardown_request(self, request: Request, error: t.Optional[BaseException] = None):
         for fn in reversed(self.global_events.teardown_request):
@@ -174,6 +183,9 @@ class dispatcher(object):
         if request.routing_exception is not None:
             print('routing exception {}'.format(request.routing_exception))
             self.raise_routing_exception(request)
+
+        if request.method == "OPTIONS":
+            return self.make_default_options_response()
 
         view_args: dict[str, t.Any] = request.view_args
         return request.match.fn(request, **view_args)
