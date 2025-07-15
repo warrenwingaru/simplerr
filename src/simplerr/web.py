@@ -12,6 +12,7 @@ from werkzeug.utils import redirect as wz_redirect
 from werkzeug.wrappers import BaseResponse
 from werkzeug.wsgi import wrap_file
 
+from . import typing as ft
 from .errors import ToManyArgumentsError
 from .methods import BaseMethod
 from .serialise import tojson
@@ -239,7 +240,7 @@ class web(object):
         return rule, args, index[rule.endpoint]
 
     @staticmethod
-    def handle_peewee_model_data(data):
+    def handle_peewee_model_data(data: ft.ResponseReturnValue):
         _data = data
         try:
             # TODO: Get rid of this dependancy
@@ -264,7 +265,7 @@ class web(object):
         return data
 
     @staticmethod
-    def handle_template_data(request: Request, rv):
+    def handle_template_data(request: Request, rv: ft.ResponseReturnValue):
         # Add request to data
         rv = rv or {}
         rv['result'] = request
@@ -278,7 +279,7 @@ class web(object):
         return response
 
     @staticmethod
-    def handle_file_data(request: Request, rv):
+    def handle_file_data(request: Request, rv: str):
         file_path = Path(request.cwd) / Path(rv)
         file = open(file_path.absolute().__str__(), "rb")
         data = wrap_file(request.environ, file)
@@ -298,53 +299,47 @@ class web(object):
         return response
 
     @staticmethod
-    def handle_str_data(data, cors=None):
+    def handle_str_data(data: str):
         response = Response(data)
         response.headers["Content-Type"] = "text/html;charset=utf-8"
-        if cors:
-            cors.set(response)
         return response
 
     @staticmethod
-    def handle_json_data(data):
+    def handle_json_data(data: dict):
         out = tojson(data)
         response = Response(out)
         response.headers["Content-Type"] = "application/json"
         return response
 
     @staticmethod
-    def make_response(request: Request, rv) -> Response:
+    def make_response(request: Request, rv: ft.ResponseReturnValue) -> Response:
         status: t.Optional[int] = None
         headers: t.Optional[dict] = None
-        if rv is None and (request.match.template is None and request.match.file is False):
-            raise TypeError(f"The view function for {request.endpoint!r} did not"
-                            f" return a valid response. The function either returned"
-                            f" None or ended without a return statement")
+
+        has_match = hasattr(request,'match')
+        if rv is None:
+            if has_match and (request.match.template is None and request.match.file is not True):
+                raise TypeError(f"The view function for {request.endpoint!r} did not"
+                                f" return a valid response. The function either returned"
+                                f" None or ended without a return statement")
         if not isinstance(rv, Response):
 
             # preprocess peewee data
             rv = web.handle_peewee_model_data(rv)
 
-            has_request = request is not None and request.match
-
-            if isinstance(rv, (str, bytes, bytearray) or isinstance(rv, cabc.Iterable)):
-                if has_request and request.match.file is True:
-                    rv = web.handle_file_data(request, rv)
-                else:
-                    rv = Response(
-                        rv,
-                        status=status,
-                        headers=headers,
-                    )
+            if request.match.template is not None:
+                rv = web.handle_template_data(request, rv)
+            elif request.match.file is True:
+                rv = web.handle_file_data(request, rv)
+            elif isinstance(rv, (dict, list)):
+                rv = web.handle_json_data(rv)
+            elif isinstance(rv, (str, bytes, bytearray)) or isinstance(rv, cabc.Iterable):
+                rv = Response(
+                    rv,
+                    status=status,
+                    headers=headers,
+                )
                 status = headers = None
-            elif has_request and request.match.template is not None:
-                if isinstance(request.match.template, str) and request.match.template:
-                    rv = web.handle_template_data(request, rv)
-            elif isinstance(rv, (dict, list,)):
-                if has_request and request.match.template is not None:
-                    rv = web.handle_template_data(request, rv)
-                else:
-                    rv = web.handle_json_data(rv)
             elif isinstance(rv, BaseResponse) or callable(rv):
                 try:
                     rv = Response.force_type(rv, request.environ)

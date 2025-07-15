@@ -36,10 +36,8 @@ class Request(BaseRequest):
     cors: t.Optional[CORS] = None
     cwd: t.Optional[str] = None
 
-    def __init__(self, *args, auth_class=None, **kwargs):
-        super(Request, self).__init__(*args, **kwargs)
-        self.view_events = WebEvents()
-        self._cached_json: t.Optional[t.Any] = None
+    _cached_json: t.Optional[t.Any] = None
+    view_events = WebEvents()
 
     @property
     def endpoint(self):
@@ -52,9 +50,9 @@ class Request(BaseRequest):
     @lru_cache(maxsize=1)
     def json(self):
         """Adds support for JSON and other niceties"""
-        if not hasattr(self, '_cached_json'):
+        if not self._cached_json:
             try:
-                self._cached_json = json.loads(self.data.decode('utf-8'))
+                self._cached_json = json.loads(self.data)
             except (ValueError, UnicodeDecodeError):
                 logger.error(f"Error decoding JSON: {self.data}")
                 self._cached_json = None

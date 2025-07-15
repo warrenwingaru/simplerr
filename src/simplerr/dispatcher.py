@@ -9,6 +9,7 @@ from werkzeug.routing import RoutingException, RequestRedirect
 from .events import WebEvents
 from .script import script
 from .session import FileSystemSessionStore
+from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
 
@@ -79,6 +80,8 @@ class dispatcher(object):
             request.environ['simplerr.url_rule'] = request.url_rule
         except HTTPException as e:
             request.routing_exception = e
+        finally:
+            request.cwd = self.cwd
 
     def should_ignore_error(self, error: t.Optional[BaseException] = None) -> bool:
         return False
@@ -135,7 +138,7 @@ class dispatcher(object):
 
         return e
 
-    def finalize_request(self, request: Request, rv: Response, from_error_handler: bool = False) -> Response:
+    def finalize_request(self, request: Request, rv: t.Union[ResponseReturnValue, HTTPException] , from_error_handler: bool = False) -> Response:
         response = web.make_response(request=request, rv=rv)
         try:
             response = self.process_response(request, response)
@@ -167,7 +170,7 @@ class dispatcher(object):
 
         return None
 
-    def dispatch_request(self, request: Request):
+    def dispatch_request(self, request: Request) -> ResponseReturnValue:
         if request.routing_exception is not None:
             print('routing exception {}'.format(request.routing_exception))
             self.raise_routing_exception(request)
