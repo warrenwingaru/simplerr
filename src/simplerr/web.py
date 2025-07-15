@@ -322,9 +322,11 @@ class web(object):
 
         template = None
         file = False
+        cors = None
         if request is not None and request.match:
             template = request.match.template
             file = request.match.file
+            cors = request.match.cors
         if rv is None:
             if template is None and not file:
                 raise TypeError(f"The view function for {request.endpoint!r} did not"
@@ -371,8 +373,8 @@ class web(object):
         if headers:
             rv.headers.update(headers)
 
-        if request.match.cors:
-            request.match.cors.set(rv)
+        if cors:
+            cors.set(rv)
 
         return rv
 
