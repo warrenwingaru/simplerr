@@ -101,7 +101,7 @@ class CORS(object):
         response.headers.set("Access-Control-Allow-Origin", self.origin)
 
         response.headers.add(
-            "Access-Control-Allow-Methods", ",".join(self.methods)
+            "Access-Control-Allow-Methods", self._methods_to_string()
         )
 
         response.headers.add(
