@@ -7,7 +7,7 @@ if t.TYPE_CHECKING:
 ResponseValue = t.Union[
     "Response",
     str,
-    dict[str, t.Any]
+    dict
 ]
 
 HeaderValue = t.Union[
