@@ -41,8 +41,8 @@ class CORS(object):
     def __init__(
             self,
             origin: str = DEFAULT_ORIGIN,
-            methods: t.Optional[list[str]] = None,
-            headers: t.Optional[list[str]] = None,
+            methods: t.Optional[list] = None,
+            headers: t.Optional[list] = None,
     ):
         """TODO: to be defined1. """
 
