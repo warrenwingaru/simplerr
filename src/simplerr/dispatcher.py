@@ -36,36 +36,41 @@ class SiteNoteFoundError(SiteError):
         super().__init__(message)
 
 
-class dispatcher(object):
+class Simplerr(object):
+    request_class: type[Request] = Request
+
+    response_class: type[Response] = Response
 
     request_class = Request
     response_class = Response
 
-    def __init__(self, cwd, global_events: WebEvents, extension=".py", debug: bool = False):
-        self.cwd = cwd
-        self.global_events = global_events
-        self.extension = extension
-        self.debug = debug
+    def __init__(
+            self,
+            site,
+            extension=".py"
+    ):
 
-    def __call__(self, environ, start_response):
-        """This methods provides the basic call signature required by WSGI"""
-        error: t.Optional[BaseException] = None
-        request = self.request_class(environ)
-        self.match(request)
-        try:
-            try:
-                response = self.full_dispatch_request(request)
-            except Exception as e:
-                error = e
-                response = self.handle_exception(request, e)
-            except:
-                error = sys.exc_info()[1]
-                raise
-            return response(environ, start_response)
-        finally:
-            if error is not None and self.should_ignore_error(error):
-                error = None
-            self.do_teardown_request(request, error)
+        self.testing = False
+        self.debug = False
+        self.site = site
+        self.extension = extension
+
+        # TODO: Need to update interface to handle these
+        self.session_store = FileSystemSessionStore()
+
+        self.cwd = self._resolve_cwd()
+
+        # Add Relevent Web Events
+        # NOTE: Events created at this level should fire static events that
+        # are fired on every request and will share application data, all other
+        # events should be reset between views. Make sure to not use the global
+        # object unless you want the event called at every view.
+        self.global_events = WebEvents()
+
+        self._setup_events()
+
+        # Add CWD to search path, this is where project modules will be located
+        self._setup_path()
 
     def make_default_options_response(self) -> Response:
         """Creates a default response for OPTIONS requests."""
@@ -193,36 +198,6 @@ class dispatcher(object):
         view_args: dict[str, t.Any] = request.view_args
         return request.match.fn(request, **view_args)
 
-
-# WSGI Server
-class wsgi(object):
-    def __init__(
-            self,
-            site,
-            extension=".py"
-    ):
-
-        self.debug = False
-        self.site = site
-        self.extension = extension
-
-        # TODO: Need to update interface to handle these
-        self.session_store = FileSystemSessionStore()
-
-        self.cwd = self._resolve_cwd()
-
-        # Add Relevent Web Events
-        # NOTE: Events created at this level should fire static events that
-        # are fired on every request and will share application data, all other
-        # events should be reset between views. Make sure to not use the global
-        # object unless you want the event called at every view.
-        self.global_events = WebEvents()
-
-        self._setup_events()
-
-        # Add CWD to search path, this is where project modules will be located
-        self._setup_path()
-
     def _resolve_cwd(self) -> Path:
         path_site = Path(self.site)
         path_with_cwd = Path.cwd() / path_site
@@ -244,7 +219,24 @@ class wsgi(object):
         sys.path.append(self.cwd.absolute().__str__())
 
     def wsgi_app(self, environ, start_response):
-        return dispatcher(self.cwd, self.global_events, self.extension, self.debug)(environ, start_response)
+        """This methods provides the basic call signature required by WSGI"""
+        error: t.Optional[BaseException] = None
+        request = self.request_class(environ)
+        self.match(request)
+        try:
+            try:
+                response = self.full_dispatch_request(request)
+            except Exception as e:
+                error = e
+                response = self.handle_exception(request, e)
+            except:
+                error = sys.exc_info()[1]
+                raise
+            return response(environ, start_response)
+        finally:
+            if error is not None and self.should_ignore_error(error):
+                error = None
+            self.do_teardown_request(request, error)
 
     def __call__(self, environ, start_response):
         return self.wsgi_app(environ, start_response)
@@ -288,3 +280,8 @@ class wsgi(object):
             run_simple(t.cast(str, host), port, self, **options)
         finally:
             self._got_first_request = False
+
+
+# WSGI Server
+def wsgi(*args, **kwargs):
+    return Simplerr(*args, **kwargs)
