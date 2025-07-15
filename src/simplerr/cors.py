@@ -1,6 +1,5 @@
 import typing as t
 from .methods import POST, GET, DELETE, PUT, PATCH, BaseMethod
-from . import Response
 
 
 class CORS(object):
@@ -98,7 +97,7 @@ class CORS(object):
                 _methods.add(method.verb)
         return ",".join(method.verb for method in self.methods)
 
-    def set(self, response: Response) -> None:
+    def set(self, response) -> None:
         response.headers.set("Access-Control-Allow-Origin", self.origin)
 
         response.headers.add(
