@@ -1,4 +1,6 @@
-from .methods import POST, GET, DELETE, PUT, PATCH
+import typing as t
+from .methods import POST, GET, DELETE, PUT, PATCH, BaseMethod
+from . import Response
 
 
 class CORS(object):
@@ -33,18 +35,74 @@ class CORS(object):
 
     """
 
-    def __init__(self):
+    DEFAULT_ORIGIN = "*"
+    DEFAULT_METHODS = [POST, GET, DELETE, PUT, PATCH]
+    DEFAULT_HEADERS = ["Content-Type", "Authorization"]
+
+    def __init__(
+            self,
+            origin: str = DEFAULT_ORIGIN,
+            methods: t.Optional[list[str]] = None,
+            headers: t.Optional[list[str]] = None,
+    ):
         """TODO: to be defined1. """
 
-        self.origin = "*"
-        self.methods = [POST, GET, DELETE, PUT, PATCH]
-        self.headers = ["Content-Type", "Authorization"]
+        self._origin = origin
+        self._methods = methods or self.DEFAULT_METHODS.copy()
+        self._headers = headers or self.DEFAULT_HEADERS.copy()
 
-    def set(self, response):
-        response.headers.add("Access-Control-Allow-Origin", "*")
+    @property
+    def origin(self) -> str:
+        """Get the configured origins(s)"""
+        return self._origin
+
+    @origin.setter
+    def origin(self, value: str):
+        if not value:
+            raise ValueError("CORS origin cannot be empty")
+
+        self._origin = value
+
+    @property
+    def methods(self) -> t.List:
+        return self._methods
+
+    @methods.setter
+    def methods(self, value: t.Union[str, t.List[str]]):
+        if not value:
+            raise ValueError("CORS methods cannot be empty")
+
+        if isinstance(value, str):
+            value = ",".split(value)
+        self._methods = value
+
+    @property
+    def headers(self) -> t.List:
+        return self._headers
+    @headers.setter
+    def headers(self, value: t.Union[str, t.List[str]]):
+        if not value:
+            raise ValueError("CORS headers cannot be empty")
+
+        if isinstance(value, str):
+            value = ",".split(value)
+
+        self._headers = value
+
+    def _methods_to_string(self) -> str:
+        _methods = set()
+        for method in self.methods:
+            if isinstance(method, str):
+                _methods.add(method.upper())
+            if isinstance(method, BaseMethod):
+                _methods.add(method.verb)
+        return ",".join(method.verb for method in self.methods)
+
+    def set(self, response: Response) -> None:
+        response.headers.set("Access-Control-Allow-Origin", self.origin)
 
         response.headers.add(
-            "Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,PATCH"
+            "Access-Control-Allow-Methods", ",".join(self.methods)
         )
 
         response.headers.add(
