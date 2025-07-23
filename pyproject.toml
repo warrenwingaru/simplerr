@@ -24,7 +24,7 @@ classifiers = [
 keywords = ["simple", "web", "development", "framework"]
 dependencies = [
     "click==7.0",
-    "Jinja2>=3.1.0",
+    "Jinja2>=3.0.0, < 3.1.0",
     "Werkzeug>=0.16.0, < 3.0.0",
     "itsdangerous==2.2.0"
 ]
