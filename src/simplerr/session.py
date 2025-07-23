@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import collections.abc as c
 import hashlib
 import typing as t
@@ -8,12 +6,8 @@ from datetime import datetime, timezone, timedelta
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from werkzeug.datastructures import CallbackDict
 
-if t.TYPE_CHECKING:
-    from .dispatcher import wsgi
-    from .wrappers import Response, Request
 
-
-class SessionSignalMixin(c.MutableMapping[str, t.Any]):
+class SessionSignalMixin(c.MutableMapping):
     @property
     def permanent(self) -> bool:
         return self.get("_permanent", False)
@@ -32,7 +26,7 @@ class SecureCookieSession(CallbackDict[str, t.Any], SessionSignalMixin):
     modified = False
     accessed = True
 
-    def __init__(self, initial: t.Union[c.Mapping[str, t.Any], c.Iterable[tuple[str, t.Any]], None] = None) -> None:
+    def __init__(self, initial: t.Union[c.Mapping, c.Iterable, None] = None) -> None:
         def on_update(self):
             self.modified = True
             self.accessed = True
@@ -82,39 +76,39 @@ class SecureCookieSessionInterface(object):
     session_class = SecureCookieSession
     null_session_class = NullSession
 
-    def make_null_session(self, app: wsgi) -> NullSession:
+    def make_null_session(self, app) -> NullSession:
         return self.null_session_class()
 
     def is_null_session(self, obj: t.Any) -> bool:
         return isinstance(obj, self.null_session_class)
 
-    def get_cookie_name(self, app: wsgi) -> str:
-        return app.config.get("SESSION_COOKIE_NAME", "sessionfast")
+    def get_cookie_name(self, app) -> str:
+        return app.config.get("SESSION_COOKIE_NAME")
 
-    def get_cookie_domain(self, app: wsgi) -> t.Optional[str]:
-        return app.config.get("SESSION_COOKIE_DOMAIN", None)
+    def get_cookie_domain(self, app) -> t.Optional[str]:
+        return app.config.get("SESSION_COOKIE_DOMAIN")
 
-    def get_cookie_path(self, app: wsgi) -> t.Optional[str]:
-        return app.config.get("SESSION_COOKIE_PATH", None)
+    def get_cookie_path(self, app) -> t.Optional[str]:
+        return app.config.get("SESSION_COOKIE_PATH") or app.config.get("APPLICATION_ROOT")
 
-    def get_cookie_httponly(self, app: wsgi) -> bool:
-        return app.config.get("SESSION_COOKIE_HTTPONLY", True)
+    def get_cookie_httponly(self, app) -> bool:
+        return app.config.get("SESSION_COOKIE_HTTPONLY")
 
-    def get_cookie_secure(self, app: wsgi) -> bool:
-        return app.config.get("SESSION_COOKIE_SECURE", False)
+    def get_cookie_secure(self, app) -> bool:
+        return app.config.get("SESSION_COOKIE_SECURE")
 
-    def get_cookie_samesite(self, app: wsgi) -> t.Optional[str]:
-        return app.config.get("SESSION_COOKIE_SAMESITE", None)
+    def get_cookie_samesite(self, app) -> t.Optional[str]:
+        return app.config.get("SESSION_COOKIE_SAMESITE")
 
-    def get_expiration_time(self, app: wsgi, session: SessionSignalMixin) -> t.Union[datetime, None]:
+    def get_expiration_time(self, app, session: SessionSignalMixin) -> t.Union[datetime, None]:
         if session.permanent:
             return datetime.now(timezone.utc) + app.config.get("PERMANENT_SESSION_LIFETIME", timedelta(days=31))
         return None
 
-    def should_set_cookie(self, app: wsgi, session: SessionSignalMixin) -> bool:
+    def should_set_cookie(self, app, session: SessionSignalMixin) -> bool:
         return session.modified or app.config["SESSION_REFRESH_EACH_REQUEST"]
 
-    def get_signing_serializer(self, app: wsgi) -> t.Optional[URLSafeTimedSerializer]:
+    def get_signing_serializer(self, app) -> t.Optional[URLSafeTimedSerializer]:
         secret_key = app.config.get("SECRET_KEY", None)
         if not secret_key:
             return None
@@ -129,7 +123,7 @@ class SecureCookieSessionInterface(object):
             }
         )
 
-    def open_session(self, app: wsgi, request: Request) -> t.Optional[SecureCookieSession]:
+    def open_session(self, app, request) -> t.Optional[SecureCookieSession]:
         s = self.get_signing_serializer(app)
         if s is None:
             return None
@@ -143,7 +137,7 @@ class SecureCookieSessionInterface(object):
         except BadSignature:
             return self.session_class()
 
-    def save_session(self, app: wsgi, session: SessionSignalMixin, response: Response) -> None:
+    def save_session(self, app, session: SessionSignalMixin, response) -> None:
         name = self.get_cookie_name(app)
         domain = self.get_cookie_domain(app)
         path = self.get_cookie_path(app)
@@ -183,143 +177,3 @@ class SecureCookieSessionInterface(object):
             samesite=samesite,
         )
         response.vary.add("Cookie")
-
-# class MMemorySessionStore(SessionStore, SessionSignalMixin):
-#     """TODO: Flesh out, sourced from
-#     https://github.com/pallets/werkzeug/blob/master/examples/contrib/sessions.py
-#
-#     Review Flask Secure Sessions
-#     https://github.com/pallets/flask/blob/master/flask/sessions.py
-#
-#     How to Use
-#     ----------
-#
-#     def application(environ, start_response):
-#         session = environ['werkzeug.session']
-#         session['visit_count'] = session.get('visit_count', 0) + 1
-#
-#         start_response('200 OK', [('Content-Type', 'text/html')])
-#         return ['''
-#             <!doctype html>
-#             <title>Session Example</title>
-#             <h1>Session Example</h1>
-#             <p>You visited this page %d times.</p>
-#         ''' % session['visit_count']]
-#
-#
-#     def make_app():
-#         return SessionMiddleware(application, MemorySessionStore())
-#     """
-#
-#     def __init__(self, session_class=None):
-#         self.COOKIE_NAME = "sessionfast"
-#         SessionStore.__init__(self, session_class=None)
-#         self.sessions = {}
-#
-#         # Number of minutes before sessions expire
-#         self.expire = 40
-#
-#     def clean(self):
-#         cleanup_sid = []
-#
-#         # Collect sessions to cleanup
-#         for key in self.sessions.keys():
-#             accessed = self.sessions[key]["meta"]["accessed"]
-#             expiration = datetime.now() - timedelta(minutes=self.expire)
-#
-#             if accessed < expiration:
-#                 cleanup_sid.append(key)
-#
-#         for expired_sid in cleanup_sid:
-#             self.delete(self.get(expired_sid))
-#
-#     def save(self, session):
-#         self.sessions[session.sid] = {
-#             "session": session,
-#             "meta": {"accessed": datetime.now()},
-#         }
-#
-#     def delete(self, session):
-#         self.sessions.pop(session.sid, None)
-#
-#     def get(self, sid):
-#         if not self.is_valid_key(sid) or sid not in self.sessions:
-#             return self.new()
-#         return self.session_class(self.sessions[sid]["session"], sid, False)
-#
-#     """
-#     From: http://werkzeug.pocoo.org/docs/0.14/contrib/sessions/
-#
-#     For better flexibility it’s recommended to not use the middleware but the store
-#     and session object directly in the application dispatching:
-#
-#     ::
-#
-#         session_store = FilesystemSessionStore()
-#
-#         def application(environ, start_response):
-#             request = Request(environ)
-#             sid = request.cookies.get('cookie_name')
-#             if sid is None:
-#                 request.session = session_store.new()
-#             else:
-#                 request.session = session_store.get(sid)
-#             response = get_the_response_object(request)
-#             if request.session.should_save:
-#                 session_store.save(request.session)
-#                 response.set_cookie('cookie_name', request.session.sid)
-#             return response(environ, start_response)
-#
-#
-#     The following provides a helper method for pre request and post request
-#     process.
-#
-#     def pre_response(self, request):
-#         print("    > Cleaning Up Sessions")
-#         self.clean()
-#
-#         print("    > Active Session: {}".format( len(self.sessions.keys())))
-#         sid = request.cookies.get(MemorySessionStore.COOKIE_NAME)
-#         print("    > Pre response session fired, cookie sid is: {}".format(sid))
-#
-#         if sid is None:
-#             request.session = self.new()
-#             print("    > Generated new sid: {}".format(request.session.sid))
-#         else:
-#             request.session = self.get(sid)
-#             print("    > Using existing sid: {}".format(request.session.sid))
-#
-#     def post_response(self, request, response):
-#         print("    > Post response session fired, saving sid: {}", request.session.sid)
-#
-#         if request.session.should_save:
-#             print("    > Saving Session to cookie")
-#             self.save(request.session)
-#             response.set_cookie(MemorySessionStore.COOKIE_NAME,
-#                                 request.session.sid)
-#
-#     """
-#
-#
-# class NoSQLSessionStore(SessionStore):
-#     """Todo: Implement TinyDB dict session store"""
-#
-#     pass
-#
-#
-# class DbSessionStore(SessionStore):
-#     """Todo: Implement Db session store"""
-#
-#     pass
-
-
-# class FileSystemSessionStore(WerkzeugFilesystemSessionStore, SessionSignalMixin):
-#     def __init__(self, session_class=None):
-#         # Number of minutes before sessions expire
-#         self.expire = 40
-#
-#         self.COOKIE_NAME = "sessionfast"
-#         WerkzeugFilesystemSessionStore.__init__(self, session_class=None)
-#
-#     def clean(self):
-#         pass

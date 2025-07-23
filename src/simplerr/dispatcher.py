@@ -1,25 +1,23 @@
-from __future__ import annotations
 import logging
 import sys
 import typing as t
+from datetime import timedelta
 from pathlib import Path
 
-from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound, MethodNotAllowed
+from werkzeug.datastructures import ImmutableDict
+from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
 from werkzeug.routing import RoutingException, RequestRedirect
 
+from .config import Config
 from .events import WebEvents
+from .helpers import get_debug_flag
 from .script import script
 from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
 
-if t.TYPE_CHECKING:
-    from .testing import SimplerrClient
-    from _typeshed.wsgi import WSGIEnvironment, StartResponse
-
 logger = logging.getLogger(__name__)
-
 
 class SiteError(Exception):
     """Base class for exceptions in this module."""
@@ -42,13 +40,27 @@ class SiteNoteFoundError(SiteError):
 
 
 class Simplerr(object):
-    request_class: type[Request] = Request
+    request_class = Request
 
-    response_class: type[Response] = Response
+    response_class = Response
 
     session_interface = SecureCookieSessionInterface()
 
-    test_client_class: type[SimplerrClient] = None
+    test_client_class = None
+
+    config_class = Config
+
+    default_config = ImmutableDict({
+        'DEBUG': None,
+        'TESTING': False,
+        'SECRET_KEY': None,
+        'SECRET_KEY_FALLBACKS': None,
+        'SESSION_COOKIE_NAME': 'session',
+        'SESSION_COOKIE_DOMAIN': None,
+        'SESSION_COOKIE_PATH': None,
+        'SESSION_COOKIE_HTTPONLY': True,
+        'SESSION_COOKIE_SECURE': False,
+    })
 
     def __init__(
             self,
@@ -58,8 +70,12 @@ class Simplerr(object):
         self.config = {
             'DEBUG': None,
             'TESTING': False,
+            'PROPAGATE_EXCEPTIONS': None,
             'SECRET_KEY': None,
             'SECRET_KEY_FALLBACKS': None,
+            'PERMANENT_SESSION_LIFETIME': timedelta(days=31),
+            'SERVER_NAME': None,
+            'APPLICATION_ROOT': '/',
             'SESSION_COOKIE_NAME': 'session',
             'SESSION_COOKIE_DOMAIN': None,
             'SESSION_COOKIE_PATH': None,
@@ -86,6 +102,12 @@ class Simplerr(object):
 
         # Add CWD to search path, this is where project modules will be located
         self._setup_path()
+
+    def make_config(self) -> Config:
+        """Creates a new config object with the default values merged in."""
+        defaults = dict(self.default_config)
+        defaults['DEBUG'] = get_debug_flag()
+        return self.config_class(defaults)
 
     def test_client(self, *args, **kwargs) -> SimplerrClient:
         cls = self.test_client_class
@@ -144,7 +166,6 @@ class Simplerr(object):
         except AttributeError:
             pass
 
-
         for fn in self.global_events.pre_request:
             rv = fn(request)
             if rv is not None:
@@ -163,10 +184,11 @@ class Simplerr(object):
 
     def handle_exception(self, request, e: BaseException) -> Response:
         exc_info = sys.exc_info()
-        propogate = None
+        propogate = self.config.get("PROPAGATE_EXCEPTIONS")
 
         if propogate is None:
-            propogate = self.debug
+            propogate = self.testing or self.debug
+
         if propogate:
             if exc_info[1] is e:
                 raise
@@ -187,7 +209,8 @@ class Simplerr(object):
 
         return e
 
-    def finalize_request(self, request: Request, rv: t.Union[ResponseReturnValue, HTTPException] , from_error_handler: bool = False) -> Response:
+    def finalize_request(self, request: Request, rv: t.Union[ResponseReturnValue, HTTPException],
+                         from_error_handler: bool = False) -> Response:
         response = web.make_response(request=request, rv=rv)
         try:
             response = self.process_response(request, response)
@@ -204,7 +227,6 @@ class Simplerr(object):
             rv = fn(request, response)
             if rv is not None:
                 response = rv
-
 
         if not self.session_interface.is_null_session(request.session):
             self.session_interface.save_session(self, request.session, response)
@@ -280,7 +302,7 @@ class Simplerr(object):
         if debug is not None:
             self.debug = bool(debug)
 
-        server_name = None
+        server_name = self.config.get("SERVER_NAME")
         sn_host = sn_port = None
 
         if server_name:
