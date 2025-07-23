@@ -15,6 +15,7 @@ from .web import web
 from .wrappers import Request, Response
 
 if t.TYPE_CHECKING:
+    from .testing import SimplerrClient
     from _typeshed.wsgi import WSGIEnvironment, StartResponse
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,12 @@ class Simplerr(object):
 
         # Add CWD to search path, this is where project modules will be located
         self._setup_path()
+
+    def test_client(self, *args, **kwargs) -> SimplerrClient:
+        cls = self.test_client_class
+        if cls is None:
+            from .testing import SimplerrClient as cls
+        return cls(self, self.response_class, *args, **kwargs)
 
     def make_default_options_response(self) -> Response:
         """Creates a default response for OPTIONS requests."""
