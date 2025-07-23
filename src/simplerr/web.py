@@ -9,7 +9,7 @@ from pathlib import Path
 from werkzeug.exceptions import abort
 from werkzeug.routing import Map, Rule
 from werkzeug.utils import redirect as wz_redirect
-from werkzeug.wrappers import BaseResponse
+from werkzeug.wrappers import Response as BaseResponse
 from werkzeug.wsgi import wrap_file
 
 from . import typing as ft
@@ -117,6 +117,8 @@ class web(object):
     rule_class = Rule
 
     url_map_class = Map
+
+    response_class = Response
 
     @staticmethod
     def restore_presets():
@@ -332,14 +334,14 @@ class web(object):
                 raise TypeError(f"The view function for {request.endpoint!r} did not"
                                 f" return a valid response. The function either returned"
                                 f" None or ended without a return statement")
-        if not isinstance(rv, Response):
+        if not isinstance(rv, web.response_class):
 
             # preprocess peewee data
             rv = web.handle_peewee_model_data(rv)
 
             if isinstance(rv, BaseResponse) or callable(rv):
                 try:
-                    rv = Response.force_type(rv, request.environ)
+                    rv = web.response_class.force_type(rv, request.environ)
                 except TypeError as e:
                     raise TypeError(
                         f"The view function did not return a valid response. The"

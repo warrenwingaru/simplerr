@@ -1,17 +1,21 @@
+from __future__ import annotations
 import logging
 import sys
 import typing as t
 from pathlib import Path
 
-from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
+from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound, MethodNotAllowed
 from werkzeug.routing import RoutingException, RequestRedirect
 
 from .events import WebEvents
 from .script import script
-from .session import FileSystemSessionStore
+from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
+
+if t.TYPE_CHECKING:
+    from _typeshed.wsgi import WSGIEnvironment, StartResponse
 
 logger = logging.getLogger(__name__)
 
@@ -41,22 +45,34 @@ class Simplerr(object):
 
     response_class: type[Response] = Response
 
-    request_class = Request
-    response_class = Response
+    session_interface = SecureCookieSessionInterface()
+
+    test_client_class: type[SimplerrClient] = None
 
     def __init__(
             self,
             site,
             extension=".py"
     ):
+        self.config = {
+            'DEBUG': None,
+            'TESTING': False,
+            'SECRET_KEY': None,
+            'SECRET_KEY_FALLBACKS': None,
+            'SESSION_COOKIE_NAME': 'session',
+            'SESSION_COOKIE_DOMAIN': None,
+            'SESSION_COOKIE_PATH': None,
+            'SESSION_COOKIE_HTTPONLY': True,
+            'SESSION_COOKIE_SECURE': False,
+            'SESSION_COOKIE_SAMESITE': None,
+            'SESSION_REFRESH_EACH_REQUEST': True,
+
+        }
 
         self.testing = False
         self.debug = False
         self.site = site
         self.extension = extension
-
-        # TODO: Need to update interface to handle these
-        self.session_store = FileSystemSessionStore()
 
         self.cwd = self._resolve_cwd()
 
@@ -66,8 +82,6 @@ class Simplerr(object):
         # events should be reset between views. Make sure to not use the global
         # object unless you want the event called at every view.
         self.global_events = WebEvents()
-
-        self._setup_events()
 
         # Add CWD to search path, this is where project modules will be located
         self._setup_path()
@@ -113,6 +127,17 @@ class Simplerr(object):
 
     def preprocess_request(self, request: Request) -> t.Optional[Response]:
 
+        try:
+            if request.session is None:
+                session_interface = self.session_interface
+                request.session = session_interface.open_session(self, request)
+
+                if request.session is None:
+                    request.session = session_interface.make_null_session(self)
+        except AttributeError:
+            pass
+
+
         for fn in self.global_events.pre_request:
             rv = fn(request)
             if rv is not None:
@@ -140,16 +165,15 @@ class Simplerr(object):
                 raise
             raise e
 
-        server_error = InternalServerError(str(e))
+        server_error = InternalServerError(original_exception=e)
 
-        if isinstance(e, FileNotFoundError):
+        if isinstance(e, OSError):
             server_error = NotFound()
 
         return self.finalize_request(request, server_error, from_error_handler=True)
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
-            print('is debug {}'.format(self.debug))
             e.show_exception = True
         if isinstance(e, HTTPException):
             return self.handle_http_exeption(e)
@@ -174,6 +198,10 @@ class Simplerr(object):
             if rv is not None:
                 response = rv
 
+
+        if not self.session_interface.is_null_session(request.session):
+            self.session_interface.save_session(self, request.session, response)
+
         return response
 
     def raise_routing_exception(self, request: Request):
@@ -189,7 +217,6 @@ class Simplerr(object):
 
     def dispatch_request(self, request: Request) -> ResponseReturnValue:
         if request.routing_exception is not None:
-            print('routing exception {}'.format(request.routing_exception))
             self.raise_routing_exception(request)
 
         if request.method == "OPTIONS":
@@ -210,15 +237,10 @@ class Simplerr(object):
 
         raise SiteNoteFoundError(self.site, "Could not access folder")
 
-    def _setup_events(self):
-        # Add some key events
-        self.global_events.on_pre_response(self.session_store.pre_response)
-        self.global_events.on_post_response(self.session_store.post_response)
-
     def _setup_path(self):
         sys.path.append(self.cwd.absolute().__str__())
 
-    def wsgi_app(self, environ, start_response):
+    def wsgi_app(self, environ: WSGIEnvironment, start_response: StartResponse):
         """This methods provides the basic call signature required by WSGI"""
         error: t.Optional[BaseException] = None
         request = self.request_class(environ)
@@ -238,7 +260,7 @@ class Simplerr(object):
                 error = None
             self.do_teardown_request(request, error)
 
-    def __call__(self, environ, start_response):
+    def __call__(self, environ: WSGIEnvironment, start_response: StartResponse):
         return self.wsgi_app(environ, start_response)
 
     def serve(self,
