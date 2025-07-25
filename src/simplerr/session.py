@@ -113,7 +113,13 @@ class SecureCookieSessionInterface(object):
         if not secret_key:
             return None
 
-        keys: list[t.Union[str, bytes]] = [secret_key]
+        keys: list[t.Union[str, bytes]] = []
+
+        fallbacks = app.config.get('SECRET_KEY_FALLBACKS', None)
+        if fallbacks:
+            keys.extend(fallbacks)
+
+        keys.append(secret_key)
         return URLSafeTimedSerializer(
             keys,
             salt=self.salt,
