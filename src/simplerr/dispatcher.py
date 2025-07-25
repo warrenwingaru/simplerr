@@ -1,12 +1,16 @@
 import logging
 import sys
 import typing as t
+from datetime import timedelta
 from pathlib import Path
 
+from werkzeug.datastructures import ImmutableDict
 from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
 from werkzeug.routing import RoutingException, RequestRedirect
 
+from .config import Config
 from .events import WebEvents
+from .helpers import get_debug_flag
 from .script import script
 from .session import FileSystemSessionStore
 from .typing import ResponseReturnValue
@@ -43,6 +47,26 @@ class wsgi(object):
 
     response_class = Response
 
+    config_class = Config
+
+    default_config = ImmutableDict({
+        'DEBUG': None,
+        'TESTING': False,
+        'PROPAGATE_EXCEPTIONS': None,
+        'SECRET_KEY': None,
+        'SECRET_KEY_FALLBACKS': None,
+        'PERMANENT_SESSION_LIFETIME': timedelta(days=31),
+        'SERVER_NAME': None,
+        'APPLICATION_ROOT': '/',
+        'SESSION_COOKIE_NAME': 'session',
+        'SESSION_COOKIE_DOMAIN': None,
+        'SESSION_COOKIE_PATH': None,
+        'SESSION_COOKIE_HTTPONLY': True,
+        'SESSION_COOKIE_SECURE': False,
+        'SESSION_COOKIE_SAMESITE': None,
+        'SESSION_REFRESH_EACH_REQUEST': True,
+    })
+
     def __init__(
             self,
             site,
@@ -69,6 +93,14 @@ class wsgi(object):
 
         # Add CWD to search path, this is where project modules will be located
         self._setup_path()
+        self.config = self.make_config()
+
+    def make_config(self) -> Config:
+        """Creates a new config object with the default values merged in."""
+        defaults = dict(self.default_config)
+        defaults['DEBUG'] = get_debug_flag()
+        return self.config_class(defaults)
+
 
     def make_default_options_response(self) -> Response:
         """Creates a default response for OPTIONS requests."""
@@ -129,7 +161,7 @@ class wsgi(object):
 
     def handle_exception(self, request, e: BaseException) -> Response:
         exc_info = sys.exc_info()
-        propogate = None
+        propogate = self.config.get("PROPAGATE_EXCEPTIONS")
 
         if propogate is None:
             propogate = self.debug
@@ -147,7 +179,6 @@ class wsgi(object):
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
-            print('is debug {}'.format(self.debug))
             e.show_exception = True
         if isinstance(e, HTTPException):
             return self.handle_http_exeption(e)
@@ -187,7 +218,6 @@ class wsgi(object):
 
     def dispatch_request(self, request: Request) -> ResponseReturnValue:
         if request.routing_exception is not None:
-            print('routing exception {}'.format(request.routing_exception))
             self.raise_routing_exception(request)
 
         if request.method == "OPTIONS":
@@ -249,7 +279,7 @@ class wsgi(object):
         if debug is not None:
             self.debug = bool(debug)
 
-        server_name = None
+        server_name = self.config.get("SERVER_NAME")
         sn_host = sn_port = None
 
         if server_name:
