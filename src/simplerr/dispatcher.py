@@ -12,7 +12,7 @@ from .config import Config
 from .events import WebEvents
 from .helpers import get_debug_flag
 from .script import script
-from .session import FileSystemSessionStore
+from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
@@ -49,6 +49,8 @@ class wsgi(object):
 
     config_class = Config
 
+    session_interface = SecureCookieSessionInterface()
+
     default_config = ImmutableDict({
         'DEBUG': None,
         'TESTING': False,
@@ -77,9 +79,6 @@ class wsgi(object):
         self.site = site
         self.extension = extension
 
-        # TODO: Need to update interface to handle these
-        self.session_store = FileSystemSessionStore()
-
         self.cwd = self._resolve_cwd()
 
         # Add Relevent Web Events
@@ -88,8 +87,6 @@ class wsgi(object):
         # events should be reset between views. Make sure to not use the global
         # object unless you want the event called at every view.
         self.global_events = WebEvents()
-
-        self._setup_events()
 
         # Add CWD to search path, this is where project modules will be located
         self._setup_path()
@@ -142,6 +139,11 @@ class wsgi(object):
         return self.finalize_request(request, rv)
 
     def preprocess_request(self, request: Request) -> t.Optional[Response]:
+
+        if request.session is None:
+            request.session = self.session_interface.open_session(self, request)
+            if request.session is None:
+                request.session = self.session_interface.make_null_session(self)
 
         for fn in self.global_events.pre_request:
             rv = fn(request)
@@ -203,6 +205,9 @@ class wsgi(object):
             if rv is not None:
                 response = rv
 
+        if not self.session_interface.is_null_session(request.session):
+            self.session_interface.save_session(self, request.session, response)
+
         return response
 
     def raise_routing_exception(self, request: Request):
@@ -237,11 +242,6 @@ class wsgi(object):
             return path_with_cwd
 
         raise SiteNoteFoundError(self.site, "Could not access folder")
-
-    def _setup_events(self):
-        # Add some key events
-        self.global_events.on_pre_response(self.session_store.pre_response)
-        self.global_events.on_post_response(self.session_store.post_response)
 
     def _setup_path(self):
         sys.path.append(self.cwd.absolute().__str__())
