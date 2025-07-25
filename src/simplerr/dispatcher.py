@@ -170,9 +170,9 @@ class wsgi(object):
                 raise
             raise e
 
-        server_error = InternalServerError(str(e))
+        server_error = InternalServerError(original_exception=e)
 
-        if isinstance(e, FileNotFoundError):
+        if isinstance(e, OSError):
             server_error = NotFound()
 
         return self.finalize_request(request, server_error, from_error_handler=True)
