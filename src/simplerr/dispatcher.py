@@ -1,14 +1,18 @@
 import logging
 import sys
 import typing as t
+from datetime import timedelta
 from pathlib import Path
 
+from werkzeug.datastructures import ImmutableDict
 from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
 from werkzeug.routing import RoutingException, RequestRedirect
 
+from .config import Config
 from .events import WebEvents
+from .helpers import get_debug_flag
 from .script import script
-from .session import FileSystemSessionStore
+from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
@@ -36,36 +40,64 @@ class SiteNoteFoundError(SiteError):
         super().__init__(message)
 
 
-class dispatcher(object):
+# WSGI Server
+class wsgi(object):
 
     request_class = Request
+
     response_class = Response
 
-    def __init__(self, cwd, global_events: WebEvents, extension=".py", debug: bool = False):
-        self.cwd = cwd
-        self.global_events = global_events
-        self.extension = extension
-        self.debug = debug
+    config_class = Config
 
-    def __call__(self, environ, start_response):
-        """This methods provides the basic call signature required by WSGI"""
-        error: t.Optional[BaseException] = None
-        request = self.request_class(environ)
-        self.match(request)
-        try:
-            try:
-                response = self.full_dispatch_request(request)
-            except Exception as e:
-                error = e
-                response = self.handle_exception(request, e)
-            except:
-                error = sys.exc_info()[1]
-                raise
-            return response(environ, start_response)
-        finally:
-            if error is not None and self.should_ignore_error(error):
-                error = None
-            self.do_teardown_request(request, error)
+    session_interface = SecureCookieSessionInterface()
+
+    default_config = ImmutableDict({
+        'DEBUG': None,
+        'TESTING': False,
+        'PROPAGATE_EXCEPTIONS': None,
+        'SECRET_KEY': None,
+        'SECRET_KEY_FALLBACKS': None,
+        'PERMANENT_SESSION_LIFETIME': timedelta(days=31),
+        'SERVER_NAME': None,
+        'APPLICATION_ROOT': '/',
+        'SESSION_COOKIE_NAME': 'session',
+        'SESSION_COOKIE_DOMAIN': None,
+        'SESSION_COOKIE_PATH': None,
+        'SESSION_COOKIE_HTTPONLY': True,
+        'SESSION_COOKIE_SECURE': False,
+        'SESSION_COOKIE_SAMESITE': None,
+        'SESSION_REFRESH_EACH_REQUEST': True,
+    })
+
+    def __init__(
+            self,
+            site,
+            extension=".py"
+    ):
+
+        self.debug = False
+        self.site = site
+        self.extension = extension
+
+        self.cwd = self._resolve_cwd()
+
+        # Add Relevent Web Events
+        # NOTE: Events created at this level should fire static events that
+        # are fired on every request and will share application data, all other
+        # events should be reset between views. Make sure to not use the global
+        # object unless you want the event called at every view.
+        self.global_events = WebEvents()
+
+        # Add CWD to search path, this is where project modules will be located
+        self._setup_path()
+        self.config = self.make_config()
+
+    def make_config(self) -> Config:
+        """Creates a new config object with the default values merged in."""
+        defaults = dict(self.default_config)
+        defaults['DEBUG'] = get_debug_flag()
+        return self.config_class(defaults)
+
 
     def make_default_options_response(self) -> Response:
         """Creates a default response for OPTIONS requests."""
@@ -108,6 +140,11 @@ class dispatcher(object):
 
     def preprocess_request(self, request: Request) -> t.Optional[Response]:
 
+        if request.session is None:
+            request.session = self.session_interface.open_session(self, request)
+            if request.session is None:
+                request.session = self.session_interface.make_null_session(self)
+
         for fn in self.global_events.pre_request:
             rv = fn(request)
             if rv is not None:
@@ -126,7 +163,7 @@ class dispatcher(object):
 
     def handle_exception(self, request, e: BaseException) -> Response:
         exc_info = sys.exc_info()
-        propogate = None
+        propogate = self.config.get("PROPAGATE_EXCEPTIONS")
 
         if propogate is None:
             propogate = self.debug
@@ -135,16 +172,15 @@ class dispatcher(object):
                 raise
             raise e
 
-        server_error = InternalServerError(str(e))
+        server_error = InternalServerError(original_exception=e)
 
-        if isinstance(e, FileNotFoundError):
+        if isinstance(e, OSError):
             server_error = NotFound()
 
         return self.finalize_request(request, server_error, from_error_handler=True)
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
-            print('is debug {}'.format(self.debug))
             e.show_exception = True
         if isinstance(e, HTTPException):
             return self.handle_http_exeption(e)
@@ -169,6 +205,9 @@ class dispatcher(object):
             if rv is not None:
                 response = rv
 
+        if not self.session_interface.is_null_session(request.session):
+            self.session_interface.save_session(self, request.session, response)
+
         return response
 
     def raise_routing_exception(self, request: Request):
@@ -184,7 +223,6 @@ class dispatcher(object):
 
     def dispatch_request(self, request: Request) -> ResponseReturnValue:
         if request.routing_exception is not None:
-            print('routing exception {}'.format(request.routing_exception))
             self.raise_routing_exception(request)
 
         if request.method == "OPTIONS":
@@ -192,36 +230,6 @@ class dispatcher(object):
 
         view_args: dict[str, t.Any] = request.view_args
         return request.match.fn(request, **view_args)
-
-
-# WSGI Server
-class wsgi(object):
-    def __init__(
-            self,
-            site,
-            extension=".py"
-    ):
-
-        self.debug = False
-        self.site = site
-        self.extension = extension
-
-        # TODO: Need to update interface to handle these
-        self.session_store = FileSystemSessionStore()
-
-        self.cwd = self._resolve_cwd()
-
-        # Add Relevent Web Events
-        # NOTE: Events created at this level should fire static events that
-        # are fired on every request and will share application data, all other
-        # events should be reset between views. Make sure to not use the global
-        # object unless you want the event called at every view.
-        self.global_events = WebEvents()
-
-        self._setup_events()
-
-        # Add CWD to search path, this is where project modules will be located
-        self._setup_path()
 
     def _resolve_cwd(self) -> Path:
         path_site = Path(self.site)
@@ -235,16 +243,28 @@ class wsgi(object):
 
         raise SiteNoteFoundError(self.site, "Could not access folder")
 
-    def _setup_events(self):
-        # Add some key events
-        self.global_events.on_pre_response(self.session_store.pre_response)
-        self.global_events.on_post_response(self.session_store.post_response)
-
     def _setup_path(self):
         sys.path.append(self.cwd.absolute().__str__())
 
     def wsgi_app(self, environ, start_response):
-        return dispatcher(self.cwd, self.global_events, self.extension, self.debug)(environ, start_response)
+        """This methods provides the basic call signature required by WSGI"""
+        error: t.Optional[BaseException] = None
+        request = self.request_class(environ)
+        self.match(request)
+        try:
+            try:
+                response = self.full_dispatch_request(request)
+            except Exception as e:
+                error = e
+                response = self.handle_exception(request, e)
+            except:
+                error = sys.exc_info()[1]
+                raise
+            return response(environ, start_response)
+        finally:
+            if error is not None and self.should_ignore_error(error):
+                error = None
+            self.do_teardown_request(request, error)
 
     def __call__(self, environ, start_response):
         return self.wsgi_app(environ, start_response)
@@ -259,7 +279,7 @@ class wsgi(object):
         if debug is not None:
             self.debug = bool(debug)
 
-        server_name = None
+        server_name = self.config.get("SERVER_NAME")
         sn_host = sn_port = None
 
         if server_name:

@@ -9,7 +9,7 @@ from pathlib import Path
 from werkzeug.exceptions import abort
 from werkzeug.routing import Map, Rule
 from werkzeug.utils import redirect as wz_redirect
-from werkzeug.wrappers import BaseResponse
+from werkzeug.wrappers import Response as BaseResponse
 from werkzeug.wsgi import wrap_file
 
 from . import typing as ft

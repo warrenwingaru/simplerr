@@ -1,3 +1,5 @@
+# Import wsgi
+from .dispatcher import wsgi
 
 # Import Core Web
 from .web import web

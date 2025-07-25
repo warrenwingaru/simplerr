@@ -12,6 +12,7 @@ from werkzeug.routing import Rule
 
 from .cors import CORS
 from .events import WebEvents
+from .session import SessionSignalMixin
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class Request(BaseRequest):
 
     _cached_json: t.Optional[t.Any] = None
     view_events = WebEvents()
+    session: t.Optional[SessionSignalMixin] = None
 
     @property
     def endpoint(self):
