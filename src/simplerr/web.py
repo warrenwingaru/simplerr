@@ -6,6 +6,7 @@ import typing as t
 from collections import abc as cabc
 from pathlib import Path
 
+from werkzeug.datastructures import Headers
 from werkzeug.exceptions import abort
 from werkzeug.routing import Map, Rule
 from werkzeug.utils import redirect as wz_redirect
@@ -319,6 +320,25 @@ class web(object):
     def make_response(request: Request, rv: ft.ResponseReturnValue) -> Response:
         status: t.Optional[int] = None
         headers: t.Optional[dict] = None
+
+        # unpack tuple returns
+        if isinstance(rv, tuple):
+            len_rv = len(rv)
+
+            # a 3-tuple is unpacked directly
+            if len == 3:
+                rv, status, headers = rv
+            # decide if a 2-tuple has status or headers
+            elif len == 2:
+                if isinstance(rv[1], (Headers,dict, tuple, list)):
+                    rv, headers = rv
+                else:
+                    rv, status = rv
+            else:
+                raise TypeError("The view function did not return a valid response tuple."
+                                " The tuple must have the form (body, status, headers),"
+                                " (body, headers), or (body, status)."
+                                )
 
         template = None
         file = False
