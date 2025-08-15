@@ -326,10 +326,10 @@ class web(object):
             len_rv = len(rv)
 
             # a 3-tuple is unpacked directly
-            if len == 3:
+            if len_rv == 3:
                 rv, status, headers = rv
             # decide if a 2-tuple has status or headers
-            elif len == 2:
+            elif len_rv == 2:
                 if isinstance(rv[1], (Headers,dict, tuple, list)):
                     rv, headers = rv
                 else:
