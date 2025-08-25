@@ -40,6 +40,15 @@ class Request(BaseRequest):
     session: t.Optional[SessionSignalMixin] = None
 
     @property
+    def json(self):
+        try:
+            return super().json
+        except TypeError:
+            pass
+        except Exception as e:
+            raise e
+
+    @property
     def endpoint(self):
         """The endpoint that matched the request URL."""
         if self.url_rule is not None:

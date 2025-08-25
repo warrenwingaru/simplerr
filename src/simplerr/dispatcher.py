@@ -340,7 +340,7 @@ class wsgi(object):
         finally:
             if error is not None and self.should_ignore_error(error):
                 error = None
-            self.do_teardown_request(request, error)
+            ctx.pop(error)
 
     def __call__(self, environ, start_response):
         return self.wsgi_app(environ, start_response)
