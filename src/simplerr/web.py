@@ -234,10 +234,10 @@ class web(object):
 
     @staticmethod
     def match_request(request: Request) -> t.Tuple[Rule, t.Dict[str, t.Any], t.Any]:
+        url_map = web.url_map_class()
+        # In case we ever implement blueprint-like system like in flask
         if current_app:
-            url_map = current_app.url_map
-        else:
-            url_map = web.url_map_class()
+            current_app.url_map = url_map
 
         index = {}
 
