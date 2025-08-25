@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+from __future__ import annotations
+
 import functools
 import logging
 import mimetypes
@@ -8,12 +10,13 @@ from pathlib import Path
 
 from werkzeug.datastructures import Headers
 from werkzeug.exceptions import abort
-from werkzeug.routing import Map, Rule
+from werkzeug.routing import Map, Rule, MapAdapter
 from werkzeug.utils import redirect as wz_redirect
 from werkzeug.wrappers import Response as BaseResponse
 from werkzeug.wsgi import wrap_file
 
 from . import typing as ft
+from .globals import current_app
 from .errors import ToManyArgumentsError
 from .methods import BaseMethod
 from .serialise import tojson
@@ -118,6 +121,8 @@ class web(object):
     rule_class = Rule
 
     url_map_class = Map
+
+    url_adapter: MapAdapter | None = None
 
     @staticmethod
     def restore_presets():
@@ -227,6 +232,10 @@ class web(object):
     @staticmethod
     def match_request(request: Request) -> t.Tuple[Rule, t.Dict[str, t.Any], t.Any]:
         url_map = web.url_map_class()
+        # In case we ever implement blueprint-like system like in flask
+        if current_app:
+            current_app.url_map = url_map
+
         index = {}
 
         for item in web.destinations:
@@ -239,8 +248,12 @@ class web(object):
             url_map.add(rule)
 
         # Check for match
-        urls = url_map.bind_to_environ(request.environ)
-        rule, args = urls.match(return_rule=True)
+        if current_app:
+            adaptor = current_app.create_url_adapter(request)
+        else:
+            adaptor = url_map.bind_to_environ(request.environ)
+
+        rule, args = adaptor.match(return_rule=True)
 
         return rule, args, index[rule.endpoint]
 

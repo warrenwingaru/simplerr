@@ -20,7 +20,7 @@ common_config = {
 
 class RequestClient:
     def __init__(self):
-        self.app = wsgi('tests/authlib/website')
+        self.app = wsgi(__name__, site='website')
         self.app.config['SECRET_KEY'] = '!'
         self.session_interface = self.app.session_interface
         self._session = None
