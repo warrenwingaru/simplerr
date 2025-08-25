@@ -1,20 +1,17 @@
-import json
-import logging
-from functools import lru_cache
 import typing as t
 
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, BadRequest
+from werkzeug.routing import Rule
 from werkzeug.wrappers import (
     Response as BaseResponse,
     Request as BaseRequest
 )
-from werkzeug.routing import Rule
 
+from . import json
 from .cors import CORS
 from .events import WebEvents
+from .globals import current_app
 from .session import SessionSignalMixin
-
-logger = logging.getLogger(__name__)
 
 
 class Request(BaseRequest):
@@ -36,6 +33,7 @@ class Request(BaseRequest):
     routing_exception: t.Optional[HTTPException] = None
     cors: t.Optional[CORS] = None
     cwd: t.Optional[str] = None
+    json_module = json
 
     _cached_json: t.Optional[t.Any] = None
     view_events = WebEvents()
@@ -48,17 +46,13 @@ class Request(BaseRequest):
             return self.url_rule.endpoint
         return None
 
-    @property
-    @lru_cache(maxsize=1)
-    def json(self):
-        """Adds support for JSON and other niceties"""
-        if not self._cached_json:
-            try:
-                self._cached_json = json.loads(self.data)
-            except (ValueError, UnicodeDecodeError):
-                logger.error(f"Error decoding JSON: {self.data}")
-                self._cached_json = None
-        return self._cached_json
+    def on_json_loading_failed(self, e: t.Optional[ValueError]) -> t.Any:
+        try:
+            return super().on_json_loading_failed(e)
+        except BadRequest as ebr:
+            if current_app and current_app.debug:
+                raise
+            raise BadRequest() from ebr
 
 
 class Response(BaseResponse):

@@ -1,23 +1,29 @@
+from __future__ import annotations
+
 import logging
-import sys
+import os
 import typing as t
 from datetime import timedelta
 from pathlib import Path
 
+import sys
 from werkzeug.datastructures import ImmutableDict
 from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
-from werkzeug.routing import RoutingException, RequestRedirect
+from werkzeug.routing import RoutingException, RequestRedirect, MapAdapter, Map
+from werkzeug.utils import cached_property
+from werkzeug.wsgi import get_host
 
 from .config import Config
+from .ctx import _AppCtxGlobals, AppContext, RequestContext
 from .events import WebEvents
-from .helpers import get_debug_flag
-from .script import script
+from .globals import request, request_ctx
+from .helpers import get_debug_flag, get_root_path
+from .json.provider import JSONProvider, DefaultJSONProvider
+from .logging import create_logger
 from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
-
-logger = logging.getLogger(__name__)
 
 
 class SiteError(Exception):
@@ -42,7 +48,6 @@ class SiteNoteFoundError(SiteError):
 
 # WSGI Server
 class wsgi(object):
-
     request_class = Request
 
     response_class = Response
@@ -50,6 +55,12 @@ class wsgi(object):
     config_class = Config
 
     session_interface = SecureCookieSessionInterface()
+
+    app_ctx_globals_class = _AppCtxGlobals
+
+    json_provider_class: type[JSONProvider] = DefaultJSONProvider
+
+    url_map_class = Map
 
     default_config = ImmutableDict({
         'DEBUG': None,
@@ -71,13 +82,26 @@ class wsgi(object):
 
     def __init__(
             self,
-            site,
-            extension=".py"
+            import_name: str,
+            site: str | os.PathLike[str] | None = None,
+            root_path: str | None = None,
+            host_matching: bool = False,
+            subdomain_matching: bool = False,
+            extension=".py",
     ):
 
+        self.import_name = import_name
         self.debug = False
+
+        if root_path is None:
+            root_path = get_root_path(self.import_name)
+
+        self.root_path = root_path
         self.site = site
         self.extension = extension
+        self.json = self.json_provider_class(self)
+        self.url_map = self.url_map_class(host_matching=host_matching)
+        self.subdomain_matching = subdomain_matching
 
         self.cwd = self._resolve_cwd()
 
@@ -92,12 +116,73 @@ class wsgi(object):
         self._setup_path()
         self.config = self.make_config()
 
+    @cached_property
+    def name(self) -> str:
+        if self.import_name == "__main__":
+            fn: str | None = getattr(sys.modules["__main__"], "__file__", None)
+            if fn is None:
+                return "__main__"
+            return os.path.splitext(os.path.basename(fn))[0]
+        return self.import_name
+
+    @property
+    def site(self) -> str:
+        if self._site is not None:
+            return os.path.join(self.root_path, self._site)
+        else:
+            return os.path.join(self.root_path, "website")
+
+    @site.setter
+    def site(self, value: str | os.PathLike[str] | None) -> None:
+        if value is not None:
+            value = os.fspath(value).rstrip(os.sep)
+        self._site = value
+
+    def app_context(self) -> AppContext:
+        return AppContext(self)
+
+    def request_context(self, environ: dict[str, t.Any]) -> RequestContext:
+        return RequestContext(self, environ)
+
+    def create_url_adapter(self, request: Request | None = None) -> MapAdapter | None:
+        if request is not None:
+            if (trusted_hosts := self.config.get("TRUSTED_HOSTS", None)) is not None:
+                request.trusted_hosts = trusted_hosts
+            request.host = get_host(request.environ, request.trusted_hosts)
+            subdomain = None
+            server_name = self.config["SERVER_NAME"]
+
+            if self.url_map.host_matching:
+                server_name = None
+            elif not self.subdomain_matching:
+                subdomain = self.url_map.default_subdomain or ""
+
+            return self.url_map.bind_to_environ(
+                request.environ, server_name=server_name, subdomain=subdomain
+            )
+        if self.config.get('SERVER_NAME', None) is not None:
+            return self.url_map.bind(
+                self.config.get('SERVER_NAME'),
+                script_name=self.config.get('APPLICATION_ROOT', '/'),
+                url_scheme=self.config.get('PREFERRED_URL_SCHEME', 'http')
+            )
+
+        return None
+
+    @cached_property
+    def logger(self) -> logging.Logger:
+        return create_logger(self)
+
+    def log_exception(self, exc_info) -> None:
+        self.logger.error(
+            f'Exception on {request.path} [{request.method}]', exc_info=exc_info
+        )
+
     def make_config(self) -> Config:
         """Creates a new config object with the default values merged in."""
         defaults = dict(self.default_config)
         defaults['DEBUG'] = get_debug_flag()
         return self.config_class(defaults)
-
 
     def make_default_options_response(self) -> Response:
         """Creates a default response for OPTIONS requests."""
@@ -110,40 +195,21 @@ class wsgi(object):
             if rv is not None:
                 error = rv
 
-    def match(self, request: Request):
-        try:
-            web.restore_presets()
-            # Get view script and view module
-            sc = script(self.cwd, request.path, extension=self.extension)
-            sc.get_module()
-
-            request.url_rule, request.view_args, request.match = web.match_request(request)
-            request.environ['simplerr.url_rule'] = request.url_rule
-        except HTTPException as e:
-            request.routing_exception = e
-        finally:
-            request.cwd = self.cwd
-
     def should_ignore_error(self, error: t.Optional[BaseException] = None) -> bool:
         return False
 
-    def full_dispatch_request(self, request) -> Response:
+    def full_dispatch_request(self) -> Response:
         self._got_first_request = True
 
         try:
-            rv = self.preprocess_request(request)
+            rv = self.preprocess_request()
             if rv is None:
-                rv = self.dispatch_request(request)
+                rv = self.dispatch_request()
         except Exception as e:
             rv = self.handle_user_exception(e)
-        return self.finalize_request(request, rv)
+        return self.finalize_request(rv)
 
-    def preprocess_request(self, request: Request) -> t.Optional[Response]:
-
-        if request.session is None:
-            request.session = self.session_interface.open_session(self, request)
-            if request.session is None:
-                request.session = self.session_interface.make_null_session(self)
+    def preprocess_request(self) -> t.Optional[Response]:
 
         for fn in self.global_events.pre_request:
             rv = fn(request)
@@ -161,7 +227,7 @@ class wsgi(object):
 
         return e
 
-    def handle_exception(self, request, e: BaseException) -> Response:
+    def handle_exception(self, e: BaseException) -> Response:
         exc_info = sys.exc_info()
         propogate = self.config.get("PROPAGATE_EXCEPTIONS")
 
@@ -172,12 +238,13 @@ class wsgi(object):
                 raise
             raise e
 
+        self.log_exception(exc_info)
         server_error = InternalServerError(original_exception=e)
 
         if isinstance(e, OSError):
             server_error = NotFound()
 
-        return self.finalize_request(request, server_error, from_error_handler=True)
+        return self.finalize_request(server_error, from_error_handler=True)
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
@@ -187,26 +254,29 @@ class wsgi(object):
 
         return e
 
-    def finalize_request(self, request: Request, rv: t.Union[ResponseReturnValue, HTTPException] , from_error_handler: bool = False) -> Response:
+    def finalize_request(self, rv: t.Union[ResponseReturnValue, HTTPException],
+                         from_error_handler: bool = False) -> Response:
         response = web.make_response(request=request, rv=rv)
         try:
-            response = self.process_response(request, response)
-        except Exception as e:
+            response = self.process_response(response)
+        except Exception:
             if not from_error_handler:
                 raise
-            logger.error(f"Request finalizing failed with an error while handling an error")
+            self.logger.error(f"Request finalizing failed with an error while handling an error")
 
         return response
 
-    def process_response(self, request: Request, response: Response) -> Response:
+    def process_response(self, response: Response) -> Response:
+        ctx = request_ctx._get_current_object() # type: ignore[attr-defined]
+
 
         for fn in reversed(self.global_events.post_request):
-            rv = fn(request, response)
+            rv = fn(ctx.request, response)
             if rv is not None:
                 response = rv
 
-        if not self.session_interface.is_null_session(request.session):
-            self.session_interface.save_session(self, request.session, response)
+        if not self.session_interface.is_null_session(ctx.session):
+            self.session_interface.save_session(self, ctx.session, response)
 
         return response
 
@@ -221,15 +291,21 @@ class wsgi(object):
 
         return None
 
-    def dispatch_request(self, request: Request) -> ResponseReturnValue:
-        if request.routing_exception is not None:
-            self.raise_routing_exception(request)
+    def dispatch_request(self) -> ResponseReturnValue:
+        req = request_ctx.request
+        if req.routing_exception is not None:
+            self.raise_routing_exception(req)
 
-        if request.method == "OPTIONS":
+        rule = req.url_rule
+
+        if (
+                getattr(rule, "provide_automatic_options", False)
+                and req.method == "OPTIONS"
+        ):
             return self.make_default_options_response()
 
         view_args: dict[str, t.Any] = request.view_args
-        return request.match.fn(request, **view_args)
+        return req.match.fn(req, **view_args)
 
     def _resolve_cwd(self) -> Path:
         path_site = Path(self.site)
@@ -248,15 +324,15 @@ class wsgi(object):
 
     def wsgi_app(self, environ, start_response):
         """This methods provides the basic call signature required by WSGI"""
+        ctx = self.request_context(environ)
         error: t.Optional[BaseException] = None
-        request = self.request_class(environ)
-        self.match(request)
         try:
             try:
-                response = self.full_dispatch_request(request)
+                ctx.push()
+                response = self.full_dispatch_request()
             except Exception as e:
                 error = e
-                response = self.handle_exception(request, e)
+                response = self.handle_exception(e)
             except:
                 error = sys.exc_info()[1]
                 raise
