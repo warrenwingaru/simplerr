@@ -23,7 +23,10 @@ from .serialise import tojson
 from .template import Template
 from .wrappers import Response, Request
 
-logger = logging.getLogger(__name__)
+if current_app:
+    logger = current_app.logger
+else:
+    logger = logging.getLogger(__name__)
 
 
 class web(object):
