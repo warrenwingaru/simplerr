@@ -35,18 +35,8 @@ class Request(BaseRequest):
     cwd: t.Optional[str] = None
     json_module = json
 
-    _cached_json: t.Optional[t.Any] = None
     view_events = WebEvents()
     session: t.Optional[SessionSignalMixin] = None
-
-    @property
-    def json(self):
-        try:
-            return super().json
-        except TypeError:
-            pass
-        except Exception as e:
-            raise e
 
     @property
     def endpoint(self):
