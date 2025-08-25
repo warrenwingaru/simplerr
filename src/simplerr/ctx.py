@@ -7,10 +7,10 @@ import typing as t
 import sys
 from werkzeug.exceptions import HTTPException
 
-from .web import web
 from .globals import _cv_app
 from .globals import _cv_request
 from .script import script
+from .web import web
 
 if t.TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
@@ -65,8 +65,14 @@ class _AppCtxGlobals:
         return object.__repr__(self)
 
 
-if t.TYPE_CHECKING:
-    from .dispatcher import wsgi
+def has_request_context() -> bool:
+    """Check if there is a request context available."""
+    return _cv_request.get(None) is not None
+
+
+def has_app_context() -> bool:
+    """Check if there is an application context available."""
+    return _cv_app.get(None) is not None
 
 
 class AppContext:
