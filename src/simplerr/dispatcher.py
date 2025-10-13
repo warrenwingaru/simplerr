@@ -105,6 +105,11 @@ class wsgi(object):
 
         self.cwd = self._resolve_cwd()
 
+        # borrowed from flask
+        # a place where extensions can store application specific state.
+        #: .. versionadded:: 0.19.4
+        self.extensions: dict[str, t.Any] = {}
+
         # Add Relevent Web Events
         # NOTE: Events created at this level should fire static events that
         # are fired on every request and will share application data, all other
