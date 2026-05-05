@@ -137,7 +137,9 @@ class web(object):
             endpoint=None,
             file=False,
             cors=None,
-            mimetype=None
+            mimetype=None,
+            provide_automatic_options: bool | None = None,
+            **options: t.Any,
     ):
 
         self.endpoint = endpoint
@@ -186,6 +188,21 @@ class web(object):
             for method in args_methods:
                 self.methods.append(method.verb)
 
+        self.methods = {item.upper() for item in self.methods}
+        if provide_automatic_options is None:
+            if current_app:
+                provide_automatic_options = (
+                    "OPTIONS" not in self.methods
+                    and current_app.config["PROVIDE_AUTOMATIC_OPTIONS"]
+                )
+
+        if provide_automatic_options:
+            methods.add("OPTIONS")
+
+        self.methods = methods
+        self.provide_automatic_options = provide_automatic_options
+        options['endpoint'] = self.endpoint
+        self.options = options
         # Only one string, maybe a route or template - default to route if not
         # already populated.
         if len(args_strings) == 1:
@@ -243,7 +260,8 @@ class web(object):
             index[item.endpoint] = item
 
             # Create the rule and add it tot he url_map
-            rule = web.rule_class(item.route, endpoint=item.endpoint, methods=item.methods)
+            rule = web.rule_class(item.route, methods=item.methods, **item.options)
+            rule.provide_automatic_options = item.provide_automatic_options
 
             url_map.add(rule)
 
