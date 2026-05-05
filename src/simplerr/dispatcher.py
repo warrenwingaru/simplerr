@@ -78,6 +78,7 @@ class wsgi(object):
         'SESSION_COOKIE_SECURE': False,
         'SESSION_COOKIE_SAMESITE': None,
         'SESSION_REFRESH_EACH_REQUEST': True,
+        'PROVIDE_AUTOMATIC_OPTIONS': True,
     })
 
     def __init__(
