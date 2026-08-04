@@ -1,5 +1,11 @@
 # Import wsgi
 from .dispatcher import wsgi
+from .config import Config as Config
+from .dispatcher import wsgi as Simplerr
+from .globals import current_app as current_app
+from .globals import g as g
+from .globals import request as request
+from .globals import session as session
 
 # Import Core Web
 from .web import web

@@ -1,21 +1,30 @@
+from __future__ import annotations
+
 import logging
+import os.path
 import sys
 import typing as t
 from datetime import timedelta
+from functools import cached_property
 from pathlib import Path
+from inspect import iscoroutinefunction
 
 from werkzeug.datastructures import ImmutableDict
 from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
 from werkzeug.routing import RoutingException, RequestRedirect
 
 from .config import Config
+from .ctx import _AppCtxGlobals, AppContext
 from .events import WebEvents
-from .helpers import get_debug_flag
+from .helpers import get_debug_flag, _CollectErrors
 from .script import script
 from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
 from .web import web
 from .wrappers import Request, Response
+
+if t.TYPE_CHECKING:
+    from _typeshed.wsgi import WSGIEnvironment
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +51,8 @@ class SiteNoteFoundError(SiteError):
 
 # WSGI Server
 class wsgi(object):
+
+    app_ctx_global_class = _AppCtxGlobals
 
     request_class = Request
 
@@ -72,12 +83,14 @@ class wsgi(object):
     def __init__(
             self,
             site,
+            import_name: str = __name__,
             extension=".py"
     ):
 
         self.debug = False
         self.site = site
         self.extension = extension
+        self.import_name = import_name
 
         self.cwd = self._resolve_cwd()
 
@@ -92,23 +105,56 @@ class wsgi(object):
         self._setup_path()
         self.config = self.make_config()
 
+    @cached_property
+    def name(self) -> str:
+        if self.import_name == "__main__":
+            fn: t.Optional[str] = getattr(sys.modules["__main__"], "__file__", None)
+            if fn is None:
+                return "__main__"
+            return os.path.splitext(os.path.basename(fn))[0]
+        return self.import_name
+
     def make_config(self) -> Config:
         """Creates a new config object with the default values merged in."""
         defaults = dict(self.default_config)
         defaults['DEBUG'] = get_debug_flag()
         return self.config_class(defaults)
 
+    def ensure_sync(self, func: t.Callable[..., t.Any]) -> t.Callable[..., t.Any]:
+        if iscoroutinefunction(func):
+            return self.async_to_sync(func)
+        return func
+
+    def async_to_sync(self, func: t.Callable[..., t.Any]) -> t.Callable[..., t.Any]:
+        try:
+            from asgiref.sync import async_to_sync as asgiref_async_to_sync
+        except ImportError:
+            raise RuntimeError(
+                "Install simplerr with the 'async' extra in order to use async views"
+            ) from None
+        return asgiref_async_to_sync(func)
+
+    def app_context(self) -> AppContext:
+        return AppContext(self)
+
+    def request_context(self, environ: WSGIEnvironment) -> AppContext:
+        return AppContext.from_environ(self, environ)
 
     def make_default_options_response(self) -> Response:
         """Creates a default response for OPTIONS requests."""
         rv = self.response_class()
         return rv
 
-    def do_teardown_request(self, request: Request, error: t.Optional[BaseException] = None):
+    def do_teardown_request(self, ctx: AppContext, error: t.Optional[BaseException] = None):
+        collect_errors = _CollectErrors()
+
         for fn in reversed(self.global_events.teardown_request):
-            rv = fn(request, error)
-            if rv is not None:
-                error = rv
+            with collect_errors:
+                rv = self.ensure_sync(fn)(ctx.request, error)
+                if rv is not None:
+                    error = rv
+
+        collect_errors.raise_any("Errors during request teardown")
 
     def match(self, request: Request):
         try:
@@ -127,26 +173,22 @@ class wsgi(object):
     def should_ignore_error(self, error: t.Optional[BaseException] = None) -> bool:
         return False
 
-    def full_dispatch_request(self, request) -> Response:
+    def full_dispatch_request(self, ctx: AppContext) -> Response:
         self._got_first_request = True
 
         try:
-            rv = self.preprocess_request(request)
+            rv = self.preprocess_request(ctx)
             if rv is None:
-                rv = self.dispatch_request(request)
+                rv = self.dispatch_request(ctx)
         except Exception as e:
             rv = self.handle_user_exception(e)
-        return self.finalize_request(request, rv)
+        return self.finalize_request(ctx, rv)
 
-    def preprocess_request(self, request: Request) -> t.Optional[Response]:
-
-        if request.session is None:
-            request.session = self.session_interface.open_session(self, request)
-            if request.session is None:
-                request.session = self.session_interface.make_null_session(self)
+    def preprocess_request(self, ctx: AppContext) -> t.Optional[Response]:
+        request = ctx.request
 
         for fn in self.global_events.pre_request:
-            rv = fn(request)
+            rv = self.ensure_sync(fn)(request)
             if rv is not None:
                 return rv
 
@@ -161,7 +203,7 @@ class wsgi(object):
 
         return e
 
-    def handle_exception(self, request, e: BaseException) -> Response:
+    def handle_exception(self, ctx: AppContext, e: BaseException) -> Response:
         exc_info = sys.exc_info()
         propogate = self.config.get("PROPAGATE_EXCEPTIONS")
 
@@ -176,8 +218,7 @@ class wsgi(object):
 
         if isinstance(e, OSError):
             server_error = NotFound()
-
-        return self.finalize_request(request, server_error, from_error_handler=True)
+        return self.finalize_request(ctx, server_error, from_error_handler=True)
 
     def handle_user_exception(self, e) -> HTTPException:
         if isinstance(e, BadRequestKeyError) and self.debug:
@@ -187,10 +228,11 @@ class wsgi(object):
 
         return e
 
-    def finalize_request(self, request: Request, rv: t.Union[ResponseReturnValue, HTTPException] , from_error_handler: bool = False) -> Response:
+    def finalize_request(self, ctx: AppContext, rv: t.Union[ResponseReturnValue, HTTPException] , from_error_handler: bool = False) -> Response:
+        request = ctx.request
         response = web.make_response(request=request, rv=rv)
         try:
-            response = self.process_response(request, response)
+            response = self.process_response(ctx, response)
         except Exception as e:
             if not from_error_handler:
                 raise
@@ -198,15 +240,15 @@ class wsgi(object):
 
         return response
 
-    def process_response(self, request: Request, response: Response) -> Response:
+    def process_response(self, ctx: AppContext, response: Response) -> Response:
 
         for fn in reversed(self.global_events.post_request):
-            rv = fn(request, response)
+            rv = self.ensure_sync(fn)(ctx.request, response)
             if rv is not None:
                 response = rv
 
-        if not self.session_interface.is_null_session(request.session):
-            self.session_interface.save_session(self, request.session, response)
+        if not self.session_interface.is_null_session(ctx._get_session()):
+            self.session_interface.save_session(self, ctx._get_session(), response)
 
         return response
 
@@ -221,7 +263,9 @@ class wsgi(object):
 
         return None
 
-    def dispatch_request(self, request: Request) -> ResponseReturnValue:
+    def dispatch_request(self, ctx: AppContext) -> ResponseReturnValue:
+        request = ctx.request
+
         if request.routing_exception is not None:
             self.raise_routing_exception(request)
 
@@ -229,7 +273,7 @@ class wsgi(object):
             return self.make_default_options_response()
 
         view_args: dict[str, t.Any] = request.view_args
-        return request.match.fn(request, **view_args)
+        return self.ensure_sync(request.match.fn)(request, **view_args)
 
     def _resolve_cwd(self) -> Path:
         path_site = Path(self.site)
@@ -248,23 +292,27 @@ class wsgi(object):
 
     def wsgi_app(self, environ, start_response):
         """This methods provides the basic call signature required by WSGI"""
+        ctx = self.request_context(environ)
         error: t.Optional[BaseException] = None
-        request = self.request_class(environ)
-        self.match(request)
         try:
             try:
-                response = self.full_dispatch_request(request)
+                ctx.push()
+                response = self.full_dispatch_request(ctx)
             except Exception as e:
                 error = e
-                response = self.handle_exception(request, e)
+                response = self.handle_exception(ctx, e)
             except:
                 error = sys.exc_info()[1]
                 raise
             return response(environ, start_response)
         finally:
+            if "werkzeug.debug.preserve_context" in environ:
+                environ["werkzeug.debug.preserve_context"](ctx)
+
             if error is not None and self.should_ignore_error(error):
                 error = None
-            self.do_teardown_request(request, error)
+
+            ctx.pop(error)
 
     def __call__(self, environ, start_response):
         return self.wsgi_app(environ, start_response)
