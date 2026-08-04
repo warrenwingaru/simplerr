@@ -92,6 +92,7 @@ class wsgi(object):
         self.import_name = import_name
 
         self.cwd = self._resolve_cwd()
+        self.extensions: dict[str, t.Any] = {}
 
         # Add Relevent Web Events
         # NOTE: Events created at this level should fire static events that
