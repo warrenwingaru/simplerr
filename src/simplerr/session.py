@@ -143,7 +143,7 @@ class SecureCookieSessionInterface(object):
         except BadSignature:
             return self.session_class()
 
-    def save_session(self, app, session: SessionSignalMixin, response) -> None:
+    def save_session(self, app, session: t.Optional[SessionSignalMixin], response) -> None:
         name = self.get_cookie_name(app)
         domain = self.get_cookie_domain(app)
         path = self.get_cookie_path(app)

@@ -19,6 +19,7 @@ from .methods import BaseMethod
 from .serialise import tojson
 from .template import Template
 from .wrappers import Response, Request
+from .globals import current_app
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +263,10 @@ class web(object):
                 out = {"results": array_out}
                 _data = out
         except ImportError:
-            logger.warning("peewee not installed, cannot serialise peewee models")
+            if current_app is not None:
+                current_app.logger.warning("peewee is not installed, cannot serialise peewee models")
+            else:
+                logger.warning("peewee not installed, cannot serialise peewee models")
         return _data
 
     @staticmethod

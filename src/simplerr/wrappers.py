@@ -13,6 +13,7 @@ from werkzeug.routing import Rule
 from .cors import CORS
 from .events import WebEvents
 from .session import SessionSignalMixin
+from .globals import current_app
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,10 @@ class Request(BaseRequest):
             try:
                 self._cached_json = json.loads(self.data)
             except (ValueError, UnicodeDecodeError):
-                logger.error(f"Error decoding JSON: {self.data}")
+                if current_app is not None:
+                    current_app.logger.error(f"Error decoding JSON: {self.data}")
+                else:
+                    logger.error(f"Error decoding JSON: {self.data}")
                 self._cached_json = None
         return self._cached_json
 

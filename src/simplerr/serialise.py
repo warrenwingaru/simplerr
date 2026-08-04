@@ -9,6 +9,8 @@ import logging
 import json
 from datetime import date, datetime, time
 
+from .globals import current_app
+
 logger = logging.getLogger(__name__)
 
 # TODO: All serialisable items need to have a obj.todict() method, otheriwse
@@ -33,7 +35,10 @@ def json_serial(obj):
                 array_out.append(model_to_dict(item))
             return array_out
     except ImportError:
-        logger.warning("peewee not installed, cannot serialise peewee models")
+        if current_app is not None:
+            current_app.logger.warning("peewee is not installed, cannot serialise peewee models")
+        else:
+            logger.warning("peewee not installed, cannot serialise peewee models")
 
     return str(obj)
 

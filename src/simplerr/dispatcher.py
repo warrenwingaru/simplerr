@@ -8,6 +8,7 @@ from datetime import timedelta
 from functools import cached_property
 from pathlib import Path
 from inspect import iscoroutinefunction
+from types import TracebackType
 
 from werkzeug.datastructures import ImmutableDict
 from werkzeug.exceptions import HTTPException, InternalServerError, BadRequestKeyError, NotFound
@@ -17,6 +18,7 @@ from .config import Config
 from .ctx import _AppCtxGlobals, AppContext
 from .events import WebEvents
 from .helpers import get_debug_flag, _CollectErrors
+from .logging import create_logger
 from .script import script
 from .session import SecureCookieSessionInterface
 from .typing import ResponseReturnValue
@@ -25,9 +27,6 @@ from .wrappers import Request, Response
 
 if t.TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
-
-logger = logging.getLogger(__name__)
-
 
 class SiteError(Exception):
     """Base class for exceptions in this module."""
@@ -113,6 +112,19 @@ class wsgi(object):
                 return "__main__"
             return os.path.splitext(os.path.basename(fn))[0]
         return self.import_name
+
+    @cached_property
+    def logger(self) -> logging.Logger:
+        return create_logger(self)
+
+    def log_exception(
+            self,
+            ctx: AppContext,
+            exc_info: tuple[type, BaseException, TracebackType] | tuple[None, None, None],
+    ):
+        self.logger.error(
+            f"Exception on {ctx.request.path} [{ctx.request.method}]", exc_info=exc_info
+        )
 
     def make_config(self) -> Config:
         """Creates a new config object with the default values merged in."""
@@ -214,6 +226,7 @@ class wsgi(object):
                 raise
             raise e
 
+        self.log_exception(ctx, exc_info)
         server_error = InternalServerError(original_exception=e)
 
         if isinstance(e, OSError):
@@ -236,7 +249,7 @@ class wsgi(object):
         except Exception as e:
             if not from_error_handler:
                 raise
-            logger.error(f"Request finalizing failed with an error while handling an error")
+            self.logger.error(f"Request finalizing failed with an error while handling an error")
 
         return response
 
