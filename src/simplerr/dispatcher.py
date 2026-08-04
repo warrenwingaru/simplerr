@@ -27,6 +27,7 @@ from .wrappers import Request, Response
 
 if t.TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
+    from .testing import SimplerrClient
 
 class SiteError(Exception):
     """Base class for exceptions in this module."""
@@ -60,6 +61,8 @@ class wsgi(object):
     config_class = Config
 
     session_interface = SecureCookieSessionInterface()
+
+    test_client_class: t.Optional[type[SimplerrClient]] = None
 
     default_config = ImmutableDict({
         'DEBUG': None,
@@ -126,6 +129,12 @@ class wsgi(object):
         self.logger.error(
             f"Exception on {ctx.request.path} [{ctx.request.method}]", exc_info=exc_info
         )
+
+    def test_client(self, use_cookies: bool = True, **kwargs: t.Any) -> SimplerrClient:
+        cls = self.test_client_class
+        if cls is None:
+            from .testing import SimplerrClient as cls
+        return cls(self, self.response_class, use_cookies=use_cookies, **kwargs)
 
     def make_config(self) -> Config:
         """Creates a new config object with the default values merged in."""
