@@ -34,7 +34,7 @@ requires-python = ">=3.6"
 dev = ["check-manifest", "peewee==3.13.3", "simplerr[test, authlib]"]
 test = ["coverage", "colour_runner", "pytest"]
 authlib = ["authlib==1.2.1", "requests==2.22.0"]
-async = ["asigref>=3.2"]
+async = ["asgiref>=3.2"]
 
 [project.urls]
 Homepage = "https://github.com/yevrah/simplerr"
