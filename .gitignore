@@ -54,3 +54,5 @@ coverage.xml
 # Environments
 env/
 .simplerr/
+
+.direnv
